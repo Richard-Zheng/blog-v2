@@ -17,3 +17,8 @@ hola:
   label: Hola
   permalink: /hola
   description: Hola tag description
+
+AI:
+  label: AI
+  permalink: /ai
+  description: AI tag description
