@@ -4,6 +4,8 @@ title: iOS App 降级
 
 简单记录一下 iOS App 降级需要用到的各种工具。
 
+<!-- truncate -->
+
 参考：[iOS 旧版 APP 推荐与降级方法（持续更新）](https://qianling.pw/ios-app/)
 
 ipa 下载工具（Windows）：[ipaDown](https://www.52pojie.cn/thread-1863801-1-1.html)
