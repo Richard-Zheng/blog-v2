@@ -94,3 +94,19 @@ snapshot_download(
     ignore_patterns=["flux2-dev.safetensors"]
 )
 ```
+
+另外，如果要在本地 Linux 使用百度网盘，可以用 Docker 镜像([GitHub](https://github.com/gshang2017/docker/tree/master/baidunetdisk))：
+
+```
+ docker create \
+    --name=baidunetdisk \
+    -p 5800:5800 \
+    -p 5900:5900 \
+    -v /配置文件位置:/config \
+    -v /下载位置:/config/baidunetdiskdownload \
+    -e GROUP_ID=1000 -e USER_ID=1000 \
+    -e VNC_PASSWORD=YOUR_PASSWORD \
+    -e ENABLE_DISABLE_GPU=true \
+    --restart unless-stopped \
+    johngong/baidunetdisk:latest
+```
