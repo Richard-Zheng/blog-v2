@@ -1,5 +1,7 @@
 # 阿里云 Ubuntu 配置
 
+## 内存优化
+
 配置选的 2C2G, 开机一看
 
 ```
@@ -46,4 +48,21 @@ Swap:              0           0           0
 
 ```
 systemctl disable --now aliyun.service
+```
+
+## Docker/Podman 相关
+
+打开 IP 转发。
+
+```
+echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
+sysctl -p
+```
+
+设置 Podman 默认 registries.
+
+```
+cat <<EOF > /etc/containers/registries.conf
+unqualified-search-registries = ["docker.io", "quay.io"]
+EOF
 ```
