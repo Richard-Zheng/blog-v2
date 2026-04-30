@@ -13,7 +13,7 @@ Swap:              0           0           0
 
 内存才 1.6 GiB！搜索了一下看到 [V2EX](https://v2ex.com/t/998120) 有人说是 crashkernel 占用的. 修改 `/etc/default/grub` 删除相关内核选项后，
 
-```
+```bash
 grub-mkconfig -o /boot/grub/grub.cfg
 ```
 
@@ -46,7 +46,7 @@ Swap:              0           0           0
 
 另外可以关掉 aliyun-service
 
-```
+```bash
 systemctl disable --now aliyun.service
 ```
 
@@ -54,15 +54,63 @@ systemctl disable --now aliyun.service
 
 打开 IP 转发。
 
-```
+```bash
 echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
 sysctl -p
 ```
 
 设置 Podman 默认 registries.
 
-```
+```bash
 cat <<EOF > /etc/containers/registries.conf
 unqualified-search-registries = ["docker.io", "quay.io"]
 EOF
+```
+
+## Vaultwarden
+
+创建数据目录和环境变量文件
+
+```bash
+mkdir -p /opt/vaultwarden/data
+install -o0 -g0 -m600 /dev/null /etc/vaultwarden.env
+cat <<EOF > /etc/vaultwarden.env
+ROCKET_PORT=8080
+DOMAIN=https://example.com
+SIGNUPS_ALLOWED=false
+WEBSOCKET_ENABLED=true
+```
+
+设置 container
+
+```bash
+mkdir -p /etc/containers/systemd
+cat <<EOF > /etc/containers/systemd/vaultwarden.container
+[Unit]
+Description=Vaultwarden container
+After=network-online.target
+
+[Container]
+ContainerName=vaultwarden
+Image=ghcr.io/dani-garcia/vaultwarden:latest
+AutoUpdate=registry
+EnvironmentFile=/etc/vaultwarden.env
+Volume=/opt/vaultwarden/data:/data
+PublishPort=127.0.0.1:8080:8080
+Exec=/start.sh
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+```
+
+由于已经写好了 `WantedBy=multi-user.target` 所以默认就会开机自动启动。
+
+手动启动：
+
+```bash
+systemctl start vaultwarden.service
 ```
