@@ -79,6 +79,7 @@ ROCKET_PORT=8080
 DOMAIN=https://example.com
 SIGNUPS_ALLOWED=false
 WEBSOCKET_ENABLED=true
+EOF
 ```
 
 设置 container
@@ -113,4 +114,12 @@ EOF
 
 ```bash
 systemctl start vaultwarden.service
+```
+
+Caddy 配置：
+
+```
+example.com {
+    reverse_proxy 127.0.0.1:8080
+}
 ```
