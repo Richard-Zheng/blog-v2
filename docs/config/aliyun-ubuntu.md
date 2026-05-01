@@ -137,6 +137,33 @@ systemctl daemon-reload
 systemctl enable --now monthly-egress-limit.timer
 ```
 
+## 每月流量超限关机保险
+
+为了最大程度确保流量不超限，设置一个最简单的定时检测脚本，不成功即关机。参考 [为云主机实现网络达量停机](https://tao.zz.ac/unix/vnstat.html)
+
+```bash
+cat <<EOF > /usr/local/sbin/traffic.sh
+#!/usr/bin/env bash
+
+LIMIT="${1:-50000000000}"
+
+result=$(
+  vnstat -i eth0 -m --json \
+    | jq -r ".interfaces[0].traffic.month[0] | if .tx > $LIMIT then \"err\" else \"ok\" end"
+)
+
+if [ "$result" != "ok" ]; then
+    systemctl poweroff
+fi
+chmod +x /usr/local/sbin/traffic.sh
+```
+
+然后配置 crontab
+
+```
+*/15 * * * * /usr/local/sbin/traffic.sh 30000000000
+```
+
 ## Docker/Podman 相关
 
 打开 IP 转发。
