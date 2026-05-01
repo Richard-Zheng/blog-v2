@@ -50,6 +50,78 @@ Swap:              0           0           0
 systemctl disable --now aliyun.service
 ```
 
+## 每月流量限制
+
+安装 vnstat
+
+```bash
+apt install -y vnstat iproute2
+systemctl enable --now vnstat
+```
+
+写脚本
+
+```bash
+cat <<EOF > /usr/local/sbin/monthly-egress-limit.sh
+#!/bin/bash
+set -e
+
+IFACE="eth0"
+LIMIT_GB=17
+RATE="500kbit"
+STATE_FILE="/run/egress-limited"
+
+# vnstat --oneline b:
+TX_BYTES=$(vnstat -i "$IFACE" --oneline b 2>/dev/null | awk -F';' '{print $10}')
+
+[ -z "$TX_BYTES" ] && exit 0
+
+LIMIT_BYTES=$((LIMIT_GB * 1000 * 1000 * 1000))
+
+if [ "$TX_BYTES" -ge "$LIMIT_BYTES" ]; then
+    if [ ! -f "$STATE_FILE" ]; then
+        tc qdisc replace dev "$IFACE" root tbf rate "$RATE" burst 32kbit latency 400ms
+        touch "$STATE_FILE"
+    fi
+else
+    if [ -f "$STATE_FILE" ]; then
+        tc qdisc del dev "$IFACE" root 2>/dev/null || true
+        rm -f "$STATE_FILE"
+    fi
+fi
+EOF
+chmod +x /usr/local/sbin/monthly-egress-limit.sh
+```
+
+用 systemd timer 每 5 分钟检查一次：
+
+```bash
+cat > /etc/systemd/system/monthly-egress-limit.service <<'EOF'
+[Unit]
+Description=Monthly egress traffic limiter
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/monthly-egress-limit.sh
+EOF
+
+cat > /etc/systemd/system/monthly-egress-limit.timer <<'EOF'
+[Unit]
+Description=Run monthly egress traffic limiter periodically
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now monthly-egress-limit.timer
+```
+
 ## Docker/Podman 相关
 
 打开 IP 转发。
