@@ -139,7 +139,7 @@ systemctl enable --now monthly-egress-limit.timer
 
 ## 每月流量超限关机保险
 
-为了最大程度确保流量不超限，设置一个最简单的定时检测脚本，不成功即关机。参考 [为云主机实现网络达量停机](https://tao.zz.ac/unix/vnstat.html)
+为了最大程度确保流量不超限，设置一个最简单的定时检测脚本，不成功即关机。参考 [为云主机实现网络达量停机](https://tao.zz.ac/unix/vnstat.html) 。
 
 ```bash
 cat <<EOF > /usr/local/sbin/traffic.sh
@@ -155,6 +155,7 @@ result=$(
 if [ "$result" != "ok" ]; then
     systemctl poweroff
 fi
+EOF
 chmod +x /usr/local/sbin/traffic.sh
 ```
 
