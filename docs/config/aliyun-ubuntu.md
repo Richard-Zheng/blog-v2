@@ -59,6 +59,21 @@ apt install -y vnstat iproute2
 systemctl enable --now vnstat
 ```
 
+查看网卡名：
+
+```bash
+ip route get 1.1.1.1
+```
+
+比如显示 `dev eth0`，那网卡就是 `eth0`。
+
+先初始化统计：
+
+```bash
+vnstat -i eth0
+systemctl restart vnstat
+```
+
 写脚本
 
 ```bash
