@@ -239,6 +239,58 @@ example.com {
 }
 ```
 
+## OpenGist
+
+创建数据目录
+
+```bash
+sudo mkdir -p /opt/opengist
+```
+
+
+```bash
+sudo vim /etc/containers/systemd/opengist.container
+```
+
+写入：
+
+```ini
+[Unit]
+Description=Opengist container
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+ContainerName=opengist
+Image=ghcr.io/thomiceli/opengist:1
+AutoUpdate=registry
+PublishPort=127.0.0.1:6157:6157
+PublishPort=2222:2222
+Volume=/opt/opengist:/opengist
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+SSH 端口 `2222` 直接暴露，因为 Git SSH clone/push 需要外部访问。官方说明如果不用 SSH，可以删掉 `2222:2222` 这个端口。
+
+Caddy 反代
+
+```caddyfile
+gist.example.com {
+    reverse_proxy 127.0.0.1:6157
+}
+```
+
+备份：
+
+```bash
+sudo tar czf opengist-backup-$(date +%F).tar.gz /opt/opengist
+```
+
 ## Coturn
 
 ### 1. 安装 coturn
