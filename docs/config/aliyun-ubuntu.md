@@ -1,5 +1,15 @@
 # 阿里云 Ubuntu 配置
 
+## 修改 SSH 端口
+
+注意要 daemon reload 才能生效。
+
+```
+sudo sed -i 's/^#\?Port.*/Port 23333/' /etc/ssh/sshd_config
+sudo systemctl daemon-reload
+sudo systemctl restart ssh
+```
+
 ## 内存优化
 
 配置选的 2C2G, 开机一看
