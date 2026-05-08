@@ -999,8 +999,8 @@ sudo nano /opt/headscale/config/config.yaml
 
 ```yaml
 server_url: https://hs.example.com
-listen_addr: 0.0.0.0:8080
-metrics_listen_addr: 0.0.0.0:9090
+listen_addr: 0.0.0.0:8070
+metrics_listen_addr: 0.0.0.0:9080
 grpc_listen_addr: 127.0.0.1:50443
 grpc_allow_insecure: false
 
@@ -1014,9 +1014,17 @@ prefixes:
 
 derp:
   server:
-    enabled: false
-  urls:
-    - https://controlplane.tailscale.com/derpmap/default
+    enabled: true
+    region_id: 999
+    region_code: "aliyun"
+    region_name: "Aliyun DERP"
+    ipv4: 你的公网IPv4
+    ipv6: 你的公网IPv6
+    stun_listen_addr: "[::]:3477"
+    private_key_path: /var/lib/headscale/derp_server_private.key
+
+  urls: []
+
   paths: []
   auto_update_enabled: true
   update_frequency: 3h
