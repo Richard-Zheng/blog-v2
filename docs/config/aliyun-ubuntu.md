@@ -622,6 +622,151 @@ turnutils_uclient -v -S -p 5349 -u turnuser -w '你的TURN_PASS' turn.example.co
 ]
 ```
 
+## PairDrop
+
+```text
+浏览器
+  ├─ HTTPS 443  → Caddy → PairDrop 容器 127.0.0.1:3000
+  └─ STUN/TURN → coturn 3478 / 5349 / relay UDP ports
+```
+
+PairDrop 官方文档明确说，跨网络传输需要自己的 TURN server；PairDrop 通过 `RTC_CONFIG` 指定给浏览器使用的 STUN/TURN 配置文件。
+
+重点：**PairDrop 容器不需要访问 coturn**。`rtc_config.json` 是发给浏览器的，浏览器会直接连接。
+
+给 PairDrop 写 RTC 配置
+
+创建目录：
+
+```bash
+sudo mkdir -p /opt/pairdrop
+```
+
+写 `/opt/pairdrop/rtc_config.json`：
+
+```bash
+sudo tee /opt/pairdrop/rtc_config.json >/dev/null <<'EOF'
+{
+  "sdpSemantics": "unified-plan",
+  "iceServers": [
+    {
+      "urls": [
+        "stun:cttf.example.com:3478",
+        "turn:cttf.example.com:3478?transport=udp",
+        "turn:cttf.example.com:3478?transport=tcp",
+        "turns:cttf.example.com:5349?transport=tcp"
+      ],
+      "username": "pairdrop",
+      "credential": "换成coturn里user=pairdrop:后面的那个密码"
+    }
+  ]
+}
+EOF
+```
+
+这个文件会被 PairDrop 提供给浏览器，所以这里的 TURN 用户名密码本来就会暴露给访问你 PairDrop 的客户端。自用没问题；如果公开给很多人用，就要靠长密码、配额、防火墙和日志监控控制滥用。
+
+---
+
+Podman Quadlet 部署 PairDrop
+
+用 system-level Quadlet：
+
+```bash
+sudo tee /etc/containers/systemd/pairdrop.container >/dev/null <<'EOF'
+[Unit]
+Description=PairDrop container
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+ContainerName=pairdrop
+Image=lscr.io/linuxserver/pairdrop:latest
+
+PublishPort=127.0.0.1:3000:3000
+
+Volume=/opt/pairdrop/rtc_config.json:/home/node/app/rtc_config.json:ro
+
+Environment=PUID=1000
+Environment=PGID=1000
+Environment=TZ=Asia/Shanghai
+Environment=RATE_LIMIT=false
+Environment=WS_FALLBACK=false
+Environment=RTC_CONFIG=/home/node/app/rtc_config.json
+Environment=DEBUG_MODE=false
+
+AutoUpdate=registry
+
+[Service]
+Restart=always
+TimeoutStartSec=900
+
+[Install]
+WantedBy=multi-user.target
+EOF
+```
+
+---
+
+4. Caddy 反代 PairDrop
+
+例如 `/etc/caddy/Caddyfile`：
+
+```caddyfile
+cttf.example.com {
+	reverse_proxy 127.0.0.1:3000
+}
+```
+
+然后：
+
+```bash
+sudo systemctl reload caddy
+```
+
+Caddy 的 `reverse_proxy` 默认会设置或追加 `X-Forwarded-For`，并设置 `X-Forwarded-Proto` 和 `X-Forwarded-Host`。([Caddy Web Server][3])
+
+---
+
+6. 测试
+
+看 PairDrop：
+
+```bash
+curl -I http://127.0.0.1:3000
+curl -I https://cttf.example.com
+```
+
+看 coturn：
+
+```bash
+sudo ss -lntup | grep -E '3478|5349|turnserver'
+```
+
+测 TLS：
+
+```bash
+openssl s_client -connect cttf.example.com:5349 -servername cttf.example.com -brief
+```
+
+测 TURN：
+
+```bash
+turnutils_uclient -v -u pairdrop -w '你的TURN密码' cttf.example.com
+```
+
+---
+
+关于 `WS_FALLBACK`
+
+我建议你先保持：
+
+```ini
+WS_FALLBACK=false
+```
+
+因为你已经有 coturn 了。`WS_FALLBACK=true` 会在 WebRTC 不可用时通过 PairDrop 服务器中转，但官方文档提醒，这样就不是 peer-to-peer 了，流量会走服务器，并且服务器可读这部分 fallback 流量。
+
 ## Authelia
 
 建议架构这样分：
