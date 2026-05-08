@@ -32,7 +32,7 @@ index 68c1e35..5dc1c0f 100755
 
 pandoc 生成出来的 docx 还是塞了很多乱糟糟的样式，为了省心我还是找到学校模板然后一段一段地复制进去了......现在看来可能不复制也行？
 
-**Windows 虚拟机:** 为了确保兼容性以及后续的 VBA 脚本需求，不得不用 Windows 上的 MS Word （之前我一直用的是 Archlinux + WPS Office）。为此我用 libvirt 开了一个 Windows 10 虚拟机并安装 MS Word，然后使用 virtofs 把 Linux 下的目录共享进虚拟机里，省得再装 Git 和 pandoc 了，效果还行。为了确保 virtofs 正常工作，需要启用共享内存
+**Windows 虚拟机:** 为了确保兼容性以及后续的 VBA 脚本需求，不得不用 Windows 上的 MS Word （之前我一直用的是 Archlinux + WPS Office）。为此我用 libvirt 开了一个 Windows 10 虚拟机并安装 MS Word，然后使用 virtiofs 把 Linux 下的目录共享进虚拟机里，省得再装 Git 和 pandoc 了，效果还行。为了确保 virtiofs 正常工作，需要启用共享内存
 
 ```xml
 <memoryBacking>
