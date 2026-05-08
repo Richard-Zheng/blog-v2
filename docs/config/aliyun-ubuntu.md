@@ -7,7 +7,7 @@
 ```
 sudo sed -i 's/^#\?Port.*/Port 23333/' /etc/ssh/sshd_config
 sudo systemctl daemon-reload
-sudo systemctl restart ssh
+sudo systemctl restart ssh.socket
 ```
 
 ## 内存优化
@@ -621,3 +621,597 @@ turnutils_uclient -v -S -p 5349 -u turnuser -w '你的TURN_PASS' turn.example.co
   }
 ]
 ```
+
+## Authelia
+
+建议架构这样分：
+
+```text
+Caddy
+ ├─ auth.example.com  -> Authelia
+ ├─ drop.example.com  -> PairDrop，Caddy forward_auth 到 Authelia
+ ├─ gist.example.com  -> Opengist，应用内 OIDC 登录到 Authelia
+ └─ hs.example.com    -> Headscale，不要加 forward_auth
+```
+
+原因：PairDrop 本身没有完善登录系统，适合用 Caddy + Authelia 反代保护；Opengist 原生支持 OpenID Connect，所以更适合直接接 Authelia 做 SSO；Headscale 也支持 OIDC，但不要用 Caddy forward_auth 套在 Headscale 外面。Authelia 的 Caddy 集成用的是 Caddy 官方 `forward_auth` 机制，Authelia 文档要求 Caddy v2.5.1+；Opengist 官方文档也明确支持 GitHub、Gitea、GitLab 和 OpenID Connect；Headscale 反代必须支持 WebSocket，Caddy 的 `reverse_proxy` 可以正常处理。([Authelia][1])
+
+下面我用这些占位域名，你自己替换：
+
+```text
+auth.example.com
+drop.example.com
+gist.example.com
+hs.example.com
+example.com
+```
+
+部署 Authelia
+
+创建目录：
+
+```bash
+sudo mkdir -p /opt/authelia/config /opt/authelia/secrets
+sudo chmod 700 /opt/authelia /opt/authelia/config /opt/authelia/secrets
+```
+
+生成几个密钥：
+
+```bash
+sudo bash -c 'tr -dc A-Za-z0-9 </dev/urandom | head -c 64 > /opt/authelia/secrets/session_secret'
+sudo bash -c 'tr -dc A-Za-z0-9 </dev/urandom | head -c 64 > /opt/authelia/secrets/storage_encryption_key'
+sudo bash -c 'tr -dc A-Za-z0-9 </dev/urandom | head -c 64 > /opt/authelia/secrets/jwt_secret'
+sudo bash -c 'tr -dc A-Za-z0-9 </dev/urandom | head -c 64 > /opt/authelia/secrets/oidc_hmac_secret'
+sudo chmod 600 /opt/authelia/secrets/*
+```
+
+生成 OIDC RSA 私钥：
+
+```bash
+sudo openssl genrsa -out /opt/authelia/secrets/oidc.rsa.pem 2048
+sudo openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt \
+  -in /opt/authelia/secrets/oidc.rsa.pem \
+  -out /opt/authelia/secrets/oidc.private.pem
+sudo chmod 600 /opt/authelia/secrets/oidc.private.pem
+```
+
+Authelia 的 OIDC Provider 需要 HMAC secret 和至少一个用于签名的 JWK；RSA key 最低 2048 bit，`RS256` 是常见配置。([GitHub][2])
+
+生成你的 Authelia 用户密码 hash：
+
+```bash
+sudo podman run --rm -it ghcr.io/authelia/authelia:4.39.19 \
+  authelia crypto hash generate argon2
+```
+
+它会让你输入密码，然后输出类似：
+
+```text
+Digest: $argon2id$v=19$...
+```
+
+记下 `Digest:` 后面的整段。Authelia 官方建议用 Authelia CLI 或容器生成密码 hash。([Authelia][3])
+
+创建用户文件：
+
+```bash
+sudo nano /opt/authelia/config/users_database.yml
+```
+
+内容：
+
+```yaml
+users:
+  fallrain:
+    disabled: false
+    displayname: "fallrain"
+    password: "$argon2id$v=19$这里换成你的hash"
+    email: "you@example.com"
+    groups:
+      - admins
+```
+
+---
+
+### 生成 Opengist OIDC secret
+
+这个 secret 有两份：
+
+一份明文给 Opengist 用；一份 hash 放进 Authelia 配置。
+
+```bash
+OPENGIST_SECRET="$(tr -dc A-Za-z0-9 </dev/urandom | head -c 64)"
+echo "$OPENGIST_SECRET" | sudo tee /opt/authelia/secrets/opengist_oidc_secret_plain
+sudo chmod 600 /opt/authelia/secrets/opengist_oidc_secret_plain
+
+sudo podman run --rm ghcr.io/authelia/authelia:4.39.19 \
+  authelia crypto hash generate pbkdf2 --variant sha512 --password "$OPENGIST_SECRET"
+```
+
+记下输出的 PBKDF2 hash，放到后面的 `client_secret`。
+
+Authelia 的 OIDC client 配置支持 `client_secret` 存 hash；官方 Opengist 集成示例也使用 PBKDF2 hash，并要求 Opengist 回调地址为 `/oauth/openid-connect/callback`。([Authelia][4])
+
+---
+
+### 写 Authelia 配置
+
+先把几个 secret 读出来：
+
+```bash
+sudo cat /opt/authelia/secrets/session_secret
+sudo cat /opt/authelia/secrets/storage_encryption_key
+sudo cat /opt/authelia/secrets/jwt_secret
+sudo cat /opt/authelia/secrets/oidc_hmac_secret
+sudo cat /opt/authelia/secrets/oidc.private.pem
+```
+
+创建配置：
+
+```bash
+sudo nano /opt/authelia/config/configuration.yml
+```
+
+内容如下，把域名、secret、OIDC 私钥、Opengist client hash 全部替换掉：
+
+```yaml
+theme: auto
+
+server:
+  address: tcp://0.0.0.0:9091/
+
+log:
+  level: info
+  format: text
+
+totp:
+  issuer: example.com
+
+identity_validation:
+  reset_password:
+    jwt_secret: "替换为 /opt/authelia/secrets/jwt_secret 的内容"
+
+authentication_backend:
+  file:
+    path: /config/users_database.yml
+
+access_control:
+  default_policy: deny
+  rules:
+    - domain: drop.example.com
+      policy: one_factor
+
+session:
+  secret: "替换为 /opt/authelia/secrets/session_secret 的内容"
+  cookies:
+    - domain: example.com
+      authelia_url: https://auth.example.com
+      default_redirection_url: https://drop.example.com
+
+storage:
+  encryption_key: "替换为 /opt/authelia/secrets/storage_encryption_key 的内容"
+  local:
+    path: /config/db.sqlite3
+
+notifier:
+  filesystem:
+    filename: /config/notification.txt
+
+identity_providers:
+  oidc:
+    hmac_secret: "替换为 /opt/authelia/secrets/oidc_hmac_secret 的内容"
+    jwks:
+      - key: |
+          -----BEGIN PRIVATE KEY-----
+          这里粘贴 /opt/authelia/secrets/oidc.private.pem 内容
+          注意每行前面保留 10 个空格
+          -----END PRIVATE KEY-----
+
+    clients:
+      - client_id: opengist
+        client_name: Opengist
+        client_secret: "$pbkdf2-sha512$这里换成刚才生成的Opengist secret hash"
+        authorization_policy: one_factor
+        redirect_uris:
+          - https://gist.example.com/oauth/openid-connect/callback
+        scopes:
+          - openid
+          - email
+          - profile
+          - groups
+        grant_types:
+          - authorization_code
+        token_endpoint_auth_method: client_secret_post
+```
+
+注意：`auth.example.com` 必须是 HTTPS，Authelia 官方明确要求 Authelia 通过 HTTPS 提供服务。([Authelia][5])
+
+---
+
+### Authelia Quadlet
+
+```bash
+sudo nano /etc/containers/systemd/authelia.container
+```
+
+内容：
+
+```ini
+[Unit]
+Description=Authelia container
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+ContainerName=authelia
+Image=ghcr.io/authelia/authelia:4.39.19
+AutoUpdate=registry
+PublishPort=127.0.0.1:9091:9091
+Volume=/opt/authelia/config:/config
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+启动：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl start authelia.service
+sudo journalctl -u authelia.service -f
+```
+
+---
+
+### Caddy 配置：Authelia + PairDrop
+
+你的 Caddyfile 加：
+
+```caddyfile
+auth.example.com {
+    reverse_proxy 127.0.0.1:9091
+}
+
+drop.example.com {
+    forward_auth 127.0.0.1:9091 {
+        uri /api/authz/forward-auth
+        copy_headers Remote-User Remote-Groups Remote-Email Remote-Name
+    }
+
+    reverse_proxy 127.0.0.1:3000
+}
+```
+
+这里 `127.0.0.1:3000` 改成你的 PairDrop 实际监听端口。
+
+然后：
+
+```bash
+sudo caddy fmt --overwrite /etc/caddy/Caddyfile
+sudo systemctl reload caddy
+```
+
+访问 `https://drop.example.com`，应该会先跳到 Authelia 登录。
+
+---
+
+### 给 Opengist 配 OIDC（可选）
+
+创建 Opengist 环境文件：
+
+```bash
+sudo install -o root -g root -m 600 /dev/null /etc/opengist.env
+sudo nano /etc/opengist.env
+```
+
+内容：
+
+```env
+OG_EXTERNAL_URL=https://gist.example.com
+
+OG_OIDC_PROVIDER_NAME=Authelia
+OG_OIDC_CLIENT_KEY=opengist
+OG_OIDC_SECRET=这里填 /opt/authelia/secrets/opengist_oidc_secret_plain 的明文内容
+OG_OIDC_DISCOVERY_URL=https://auth.example.com/.well-known/openid-configuration
+OG_OIDC_GROUP_CLAIM_NAME=groups
+OG_OIDC_ADMIN_GROUP=admins
+```
+
+Opengist 官方说明可以用环境变量配置 OIDC，其中包括 provider name、client key、secret、discovery URL、group claim 和 admin group。([Authelia][4])
+
+修改你的 Opengist Quadlet：
+
+```bash
+sudo nano /etc/containers/systemd/opengist.container
+```
+
+推荐变成：
+
+```ini
+[Unit]
+Description=Opengist container
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+ContainerName=opengist
+Image=ghcr.io/thomiceli/opengist:1
+AutoUpdate=registry
+EnvironmentFile=/etc/opengist.env
+PublishPort=127.0.0.1:6157:6157
+PublishPort=2222:2222
+Volume=/opt/opengist:/opengist
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+重启：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart opengist.service
+sudo journalctl -u opengist.service -f
+```
+
+Caddy：
+
+```caddyfile
+gist.example.com {
+    reverse_proxy 127.0.0.1:6157
+}
+```
+
+这里**不要再套 Authelia forward_auth**，因为 Opengist 自己会走 OIDC 登录。否则 OAuth 回调、Git HTTP 操作可能会变复杂。
+
+Opengist 后台里建议打开：
+
+```text
+Disable signup
+Disable login form
+```
+
+Opengist 管理面板支持禁用注册、要求登录、禁用登录表单；禁用登录表单后用户只会看到 OAuth providers。([Opengist][6])
+
+## Headscale
+
+Headscale 官方容器文档说明配置目录挂载到 `/etc/headscale`，数据目录挂载到 `/var/lib/headscale`，容器命令是 `serve`；它也说明容器镜像可用 `docker.io/headscale/headscale:<VERSION>` 或 `ghcr.io/juanfont/headscale:<VERSION>`。([Headscale][7])
+
+创建目录：
+
+```bash
+sudo mkdir -p /opt/headscale/config /opt/headscale/lib
+```
+
+配置：
+
+```bash
+sudo nano /opt/headscale/config/config.yaml
+```
+
+最小可用配置：
+
+```yaml
+server_url: https://hs.example.com
+listen_addr: 0.0.0.0:8080
+metrics_listen_addr: 0.0.0.0:9090
+grpc_listen_addr: 127.0.0.1:50443
+grpc_allow_insecure: false
+
+noise:
+  private_key_path: /var/lib/headscale/noise_private.key
+
+prefixes:
+  v4: 100.64.0.0/10
+  v6: fd7a:115c:a1e0::/48
+  allocation: sequential
+
+derp:
+  server:
+    enabled: false
+  urls:
+    - https://controlplane.tailscale.com/derpmap/default
+  paths: []
+  auto_update_enabled: true
+  update_frequency: 3h
+
+database:
+  type: sqlite
+  sqlite:
+    path: /var/lib/headscale/db.sqlite
+    write_ahead_log: true
+
+tls_cert_path: ""
+tls_key_path: ""
+
+log:
+  level: info
+  format: text
+
+policy:
+  mode: file
+  path: ""
+
+dns:
+  magic_dns: true
+  base_domain: tail.example.com
+  override_local_dns: true
+  nameservers:
+    global:
+      - 1.1.1.1
+      - 1.0.0.1
+  search_domains: []
+  extra_records: []
+
+unix_socket: /var/run/headscale/headscale.sock
+unix_socket_permission: "0770"
+
+logtail:
+  enabled: false
+
+randomize_client_port: false
+
+taildrop:
+  enabled: true
+```
+
+Headscale 的反代模式里，`server_url` 应该是公网 HTTPS 域名，`listen_addr` 可以监听容器内 `0.0.0.0:8080`，TLS 留给 Caddy 处理时 `tls_cert_path` 和 `tls_key_path` 为空。([Headscale][8])
+
+创建 Quadlet：
+
+```bash
+sudo nano /etc/containers/systemd/headscale.container
+```
+
+DERP 服务器需要知道真实源 IP, 所以需要设置 `Network=host`，内容：
+
+```ini
+[Unit]
+Description=Headscale container
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+ContainerName=headscale
+Image=docker.io/headscale/headscale:0.28.0
+AutoUpdate=registry
+Exec=serve
+Network=host
+Volume=/opt/headscale/config:/etc/headscale:ro
+Volume=/opt/headscale/lib:/var/lib/headscale
+Tmpfs=/var/run/headscale
+HealthCmd=["headscale","health"]
+HealthStartPeriod=60s
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+启动：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl start headscale.service
+sudo journalctl -u headscale.service -f
+```
+
+Caddy：
+
+```caddyfile
+hs.example.com {
+    reverse_proxy 127.0.0.1:8081
+}
+```
+
+Headscale 反向代理必须支持 WebSocket；不要把 Cloudflare 橙云代理套在 Headscale 前面，Headscale 文档明确说 Cloudflare proxy/tunnel 不支持它需要的 WebSocket POST。([Headscale][8])
+
+---
+
+### Headscale 加设备
+
+先建用户：
+
+```bash
+sudo podman exec -it headscale headscale users create richard
+sudo podman exec -it headscale headscale users list
+```
+
+创建预授权 key，注意新版本通常用 user ID：
+
+```bash
+sudo podman exec -it headscale headscale preauthkeys create --user 1 --reusable --expiration 24h
+```
+
+客户端加入：
+
+```bash
+sudo tailscale up \
+  --login-server https://hs.example.com \
+  --authkey hskey-auth-xxxx
+```
+
+Headscale 的预授权 key 流程就是先创建 user，再创建 preauthkey，然后客户端用 `tailscale up --login-server ... --authkey ...` 注册。([Juan Font][9])
+
+---
+
+### 可选：Headscale 也接 Authelia OIDC
+
+这个可以后面再做。做法是给 Authelia 再加一个 OIDC client：
+
+```yaml
+      - client_id: headscale
+        client_name: Headscale
+        client_secret: "$pbkdf2-sha512$这里换成Headscale client secret hash"
+        authorization_policy: one_factor
+        redirect_uris:
+          - https://hs.example.com/oidc/callback
+        scopes:
+          - openid
+          - email
+          - profile
+        grant_types:
+          - authorization_code
+```
+
+然后在 Headscale `config.yaml` 里加：
+
+```yaml
+oidc:
+  issuer: https://auth.example.com
+  client_id: headscale
+  client_secret: "这里填 Headscale OIDC 明文 secret"
+  expiry: 180d
+  scope: ["openid", "profile", "email"]
+  email_verified_required: false
+```
+
+Headscale OIDC 基本配置需要 issuer URL、client ID、client secret 和 redirect URI，redirect URI 通常是 `https://headscale.example.com/oidc/callback`。 ([Headscale][10])
+
+---
+
+最后检查顺序
+
+```bash
+sudo systemctl restart authelia
+sudo systemctl restart opengist
+sudo systemctl restart headscale
+sudo systemctl reload caddy
+
+sudo podman ps
+sudo journalctl -u authelia -n 100
+sudo journalctl -u opengist -n 100
+sudo journalctl -u headscale -n 100
+```
+
+建议你先按这个顺序跑通：
+
+```text
+Authelia 登录页
+→ PairDrop forward_auth
+→ Opengist OIDC
+→ Headscale 基础 preauthkey
+→ Headscale OIDC
+```
+
+这样排错最清楚。
+
+[1]: https://www.authelia.com/integration/proxies/caddy/ "Caddy | Integration | Authelia"
+[2]: https://raw.githubusercontent.com/authelia/authelia/v4.39.19/config.template.yml "raw.githubusercontent.com"
+[3]: https://www.authelia.com/reference/guides/passwords/?utm_source=chatgpt.com "Passwords | Reference"
+[4]: https://www.authelia.com/integration/openid-connect/clients/opengist/ "Opengist | OpenID Connect 1.0 | Integration"
+[5]: https://www.authelia.com/integration/prologue/get-started/?utm_source=chatgpt.com "Get started | Integration"
+[6]: https://opengist.io/docs/configuration/admin-panel.html?utm_source=chatgpt.com "Admin panel"
+[7]: https://headscale.net/stable/setup/install/container/ "Container - Headscale"
+[8]: https://headscale.net/stable/ref/integration/reverse-proxy/ "Reverse proxy - Headscale"
+[9]: https://juanfont.github.io/headscale/development/ref/registration/?utm_source=chatgpt.com "Registration methods"
+[10]: https://headscale.net/stable/ref/oidc/ "OpenID Connect - Headscale"
+
