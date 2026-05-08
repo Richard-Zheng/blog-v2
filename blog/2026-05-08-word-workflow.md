@@ -28,10 +28,6 @@ index 68c1e35..5dc1c0f 100755
      echo "Conversion to Markdown failed"
      exit 1
    }
-@@ -142,4 +142,3 @@ for file in $(git diff --cached --name-only --diff-filter=D | grep "\.docx$"); d
-   fi
- 
- done
 ```
 
 pandoc 生成出来的 docx 还是塞了很多乱糟糟的样式，为了省心我还是找到学校模板然后一段一段地复制进去了......现在看来可能不复制也行？
