@@ -2,7 +2,7 @@
 slug: word-workflow
 title: Word 毕业论文自用工作流
 tags: ['Word']
----# 毕业论文自用工作流
+---
 
 到了要写毕业论文的时候，首先面临一个选择：LaTeX 还是 Word ？这个问题你需要咨询你的指导老师，看查重系统能否提交 Word 以外的格式。我的学校只接受 Word 所以被迫选择 Word.
 
