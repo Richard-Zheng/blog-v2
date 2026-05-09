@@ -121,3 +121,57 @@ tailscale up
 ```
 
 This will output a URL. Copy and paste that URL into your web browser to authenticate the router to your Tailnet.
+
+### Headscale
+
+On headscale server side:
+
+create user
+
+```
+sudo podman exec -it headscale headscale users create richard
+sudo podman exec -it headscale headscale users list
+```
+
+create pre-auth key
+
+```
+sudo podman exec -it headscale headscale preauthkeys create --user 1 --reusable --expiration 24h
+```
+
+On client side:
+
+```
+tailscale up \
+  --login-server https://hs.example.com \
+  --authkey hskey-auth-xxxx
+```
+
+### Subnet router
+
+On client side, advertise routes:
+
+```
+sudo tailscale up \
+  --login-server https://hs.example.com \
+  --advertise-routes=192.168.1.0/24
+```
+
+or when it's been up:
+
+```
+sudo tailscale set --advertise-routes=192.168.1.0/24
+```
+
+and allow on server side:
+
+```
+headscale nodes list-routes
+headscale nodes approve-routes --identifier <Node-ID> --routes 192.168.1.0/24
+```
+
+For other clients to accept routes:
+
+```
+sudo tailscale set --accept-routes
+```
