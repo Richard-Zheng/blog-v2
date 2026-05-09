@@ -139,6 +139,14 @@ search tail.example.com lan
 
 If you want to prevent that, refer to [this blog post](https://leezh.net/articles/2025-08-16-setting-up-tailscale-with-magic-dns-on-an-openwrt-router/).
 
+Disable Tailscale auto-set DNS:
+
+```
+tailscale set --accept-dns=false
+```
+
+You may also need to disable DNSMasq's DNS hijack feature, otherwise all DNS request will be redirected to router:53, and when dnsmasq doesn't listening on tailscale's interface ip, all DNS request sent through tailscale will fail.
+
 ### Headscale
 
 On headscale server side:
