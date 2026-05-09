@@ -34,7 +34,7 @@ start_service() {
     procd_set_param env TS_DEBUG_FIREWALL_MODE=nftables
     procd_set_param command /usr/sbin/tailscaled
     procd_append_param command --state=/etc/tailscale/tailscaled.state
-    procd_append_param command --port=54114
+    procd_append_param command --port=41641
     procd_set_param respawn
     procd_set_param stdout 1
     procd_set_param stderr 1
@@ -44,6 +44,7 @@ start_service() {
 stop_service() {
     /usr/sbin/tailscaled --cleanup
 }
+EOF
 ```
 
 Now, make the init script executable:
