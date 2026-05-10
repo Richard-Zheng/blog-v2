@@ -200,3 +200,9 @@ For other clients to accept routes:
 ```
 sudo tailscale set --accept-routes
 ```
+
+Options I ended up using:
+
+```
+tailscale up --advertise-routes=192.168.1.0/24 --login-server=https://hs.example.com --netfilter-mode=off --accept-dns=false --advertise-exit-node --snat-subnet-routes=false
+```
