@@ -234,7 +234,7 @@ WantedBy=multi-user.target
 EOF
 ```
 
-由于已经写好了 `WantedBy=multi-user.target` 所以默认就会开机自动启动。
+根据 [podman-systemd.unit 文档](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html#enabling-unit-files)，由于 transient 的 unit 不支持 `systemd enable`，为了能实现开机自启的效果 systemd generator 在看到 `WantedBy=multi-user.target` 这一行之后就会自动将其添加到开机启动项中。
 
 手动启动：
 
@@ -1145,8 +1145,8 @@ sudo nano /opt/headscale/config/config.yaml
 
 ```yaml
 server_url: https://hs.example.com
-listen_addr: 0.0.0.0:8070
-metrics_listen_addr: 0.0.0.0:9080
+listen_addr: 127.0.0.1:8070
+metrics_listen_addr: 127.0.0.1:9080
 grpc_listen_addr: 127.0.0.1:50443
 grpc_allow_insecure: false
 
