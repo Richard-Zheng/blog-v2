@@ -201,7 +201,8 @@ mkdir -p /opt/vaultwarden/data
 install -o0 -g0 -m600 /dev/null /etc/vaultwarden.env
 cat <<EOF > /etc/vaultwarden.env
 ROCKET_PORT=8080
-DOMAIN=https://example.com
+ROCKET_ADDRESS=127.0.0.1
+DOMAIN=https://vw.example.com
 SIGNUPS_ALLOWED=false
 WEBSOCKET_ENABLED=true
 EOF
@@ -222,7 +223,7 @@ Image=ghcr.io/dani-garcia/vaultwarden:latest
 AutoUpdate=registry
 EnvironmentFile=/etc/vaultwarden.env
 Volume=/opt/vaultwarden/data:/data
-PublishPort=127.0.0.1:8080:8080
+Network=host
 Exec=/start.sh
 
 [Service]
@@ -1194,11 +1195,9 @@ policy:
 dns:
   magic_dns: true
   base_domain: tail.example.com
-  override_local_dns: true
+  override_local_dns: false
   nameservers:
-    global:
-      - 1.1.1.1
-      - 1.0.0.1
+    global: []
   search_domains: []
   extra_records: []
 
