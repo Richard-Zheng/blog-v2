@@ -60,6 +60,16 @@ Swap:              0           0           0
 systemctl disable --now aliyun.service
 ```
 
+## 日志大小限制
+
+修改 `/etc/systemd/journald.conf`
+
+```
+[Journal]
+SystemMaxUse=500M
+RuntimeMaxUse=32M
+```
+
 ## 每月流量限制
 
 安装 vnstat
