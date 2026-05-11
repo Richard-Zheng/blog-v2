@@ -9,6 +9,36 @@ cp tailscale_1.96.4_arm64/tailscale /usr/sbin/
 cp tailscale_1.96.4_arm64/tailscaled /usr/sbin/
 ```
 
+or compile from source to reduce size:
+
+```
+export GOOS=linux
+export GOARCH=arm64
+git clone https://github.com/tailscale/tailscale.git
+cd tailscale
+go build -o tailscale.combined \
+  -tags ts_include_cli \
+  -ldflags="-s -w" \
+   ./cmd/tailscaled
+upx --lzma --best ./tailscale.combined
+```
+
+and then, on openwrt:
+
+```
+mv tailscale.combined /usr/sbin/tailscale.combined
+chmod +x /usr/sbin/tailscale.combined
+ln -s /usr/sbin/tailscale.combined /usr/sbin/tailscale
+ln -s /usr/sbin/tailscale.combined /usr/sbin/tailscaled
+```
+
+Install dependencies:
+
+```
+opkg update
+opkg install kmod-tun ca-bundle ca-certificates
+```
+
 ## 1. Set Permissions and Create the State Directory
 
 First, ensure both binaries are executable and create the directory where Tailscale will save its authentication state so it survives reboots. Run this in your SSH terminal:
@@ -94,6 +124,11 @@ uci set firewall.@zone[-1].device='tailscale0'
 uci add firewall forwarding
 uci set firewall.@forwarding[-1].src='tailscale'
 uci set firewall.@forwarding[-1].dest='lan'
+
+# Allow traffic from Tailscale to WAN (Useful if doing exit node)
+uci add firewall forwarding
+uci set firewall.@forwarding[-1].src='tailscale'
+uci set firewall.@forwarding[-1].dest='wan'
 
 # Allow traffic from LAN to Tailscale (Useful if accessing other Tailscale nodes from LAN)
 uci add firewall forwarding
