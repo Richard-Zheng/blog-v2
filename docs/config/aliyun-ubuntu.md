@@ -543,6 +543,8 @@ denied-peer-ip=fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
 denied-peer-ip=fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff
 ```
 
+`denied-peer-ip` 列表来源于 [这里](https://www.enablesecurity.com/blog/cve-2020-26262-bypass-of-coturns-access-control-protection/).
+
 coturn 支持 `listening-ip=0.0.0.0` 和 `listening-ip=::` 来监听 IPv4/IPv6；默认普通 TURN 端口是 3478，TLS 端口是 5349；relay UDP 端口范围默认是 49152-65535，可以用 `min-port` / `max-port` 收窄。([GitHub](https://github.com/coturn/coturn/blob/master/examples/etc/turnserver.conf))
 
 启动：
