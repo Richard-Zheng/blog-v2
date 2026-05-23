@@ -34,7 +34,16 @@ PVE 单网口 vmbr0
 | 主 LAN   | 20   | `192.168.20.0/24` | 家里正常网络               |
 | 救援管理 | 99   | `192.168.99.0/24` | 软路由炸了还能进硬路由/PVE |
 
-## 准备 OpenWrt 镜像
+现在需要在两种虚拟化技术之间选择：
+
+1. kvm 优点是隔离性好，可以运行完整内核。缺点是 paravirtualized 网卡性能有损耗。
+2. LXC 容器 优点是性能高，缺点是内核和 PVE 共享，无法安装 OpenWrt 独享的内核模块等。
+
+由于两个我都尝试了一下，下面记录两种路线。
+
+## KVM 路线
+
+### 准备 OpenWrt 镜像
 
 使用 [Firmware Selector](https://firmware-selector.openwrt.org/?target=x86%2F64&id=generic) 制作镜像
 
@@ -165,7 +174,7 @@ ssh root@pve
 gunzip openwrt-25.12.4-xxx-x86-64-generic-ext4-combined-efi.img.gz
 ```
 
-## 创建和启动虚拟机
+### 创建和启动虚拟机
 
 创建虚拟机
 
@@ -206,6 +215,139 @@ qm start 106
 ```
 
 然后去到控制台设置一下 root 密码
+
+## LXC 路线
+
+### 下载 OpenWrt rootfs
+
+不要用 combined-efi 镜像。LXC 要用 rootfs。
+
+OpenWrt x86/64 target 提供 rootfs 文件；OpenWrt x86 页面也说明 x86/64 可以运行在 PC、VM、server 这类硬件上。
+
+在 PVE 上：
+
+```
+cd /var/lib/vz/template/cache
+wget https://downloads.openwrt.org/releases/25.12.4/targets/x86/64/openwrt-25.12.4-x86-64-rootfs.tar.gz
+```
+
+### 创建 privileged LXC
+
+假设 CTID 用 108：
+
+```
+CTID=108
+
+pct create $CTID local:vztmpl/openwrt-25.12.4-x86-64-rootfs.tar.gz \
+  --hostname openwrt-lxc \
+  --ostype unmanaged \
+  --rootfs local-lvm:1 \
+  --memory 512 \
+  --cores 2 \
+  --swap 0 \
+  --unprivileged 0 \
+  --features nesting=1 \
+  --net0 name=eth0,bridge=vmbr0,tag=20,type=veth,firewall=0 \
+  --net1 name=eth1,bridge=vmbr0,tag=10,type=veth,firewall=0 \
+  --onboot 1
+```
+
+如果你的存储不是 local-lvm，看：
+
+```
+pvesm status
+```
+
+### 给容器加 PPPoE 所需权限
+
+PPPoE 需要 `/dev/ppp`。先在 PVE 宿主机上确认：
+
+```bash
+ls -l /dev/ppp
+```
+
+如果没有输出：
+
+```bash
+modprobe ppp_generic
+modprobe pppoe
+modprobe pppox
+mknod /dev/ppp c 108 0
+chmod 600 /dev/ppp
+```
+
+然后编辑：
+
+```bash
+vi /etc/pve/lxc/108.conf
+```
+
+追加：
+
+```ini
+lxc.apparmor.profile: unconfined
+lxc.cgroup2.devices.allow: c 108:0 rwm
+lxc.mount.entry: /dev/ppp dev/ppp none bind,create=file
+```
+
+完整关键配置大概类似：
+
+```ini
+arch: amd64
+cores: 2
+hostname: openwrt-lxc
+memory: 512
+ostype: unmanaged
+rootfs: local-lvm:vm-107-disk-0,size=1G
+swap: 0
+unprivileged: 0
+features: nesting=1
+onboot: 1
+net0: name=eth0,bridge=vmbr0,firewall=0,tag=20,type=veth
+net1: name=eth1,bridge=vmbr0,firewall=0,tag=10,type=veth
+lxc.apparmor.profile: unconfined
+lxc.cgroup2.devices.allow: c 108:0 rwm
+lxc.mount.entry: /dev/ppp dev/ppp none bind,create=file
+```
+
+### 配置 PVE 内核
+
+PVE 宿主机上加载模块。
+
+```bash
+cat >/etc/modules-load.d/openwrt-lxc-router.conf <<'EOF'
+ppp_generic
+pppoe
+pppox
+nf_tables
+nf_nat
+nf_conntrack
+br_netfilter
+EOF
+```
+
+还需要打开这些选项：
+
+```bash
+cat >/etc/sysctl.d/99-openwrt-lxc-router.conf <<'EOF'
+net.ipv4.ip_forward=1
+net.ipv6.conf.all.forwarding=1
+net.bridge.bridge-nf-call-iptables=0
+net.bridge.bridge-nf-call-ip6tables=0
+net.bridge.bridge-nf-call-arptables=0
+EOF
+
+sysctl --system
+```
+
+启动：
+
+```
+pct start 108
+pct enter 108
+```
+
+然后在命令行配置 OpenWrt, 参考上面的 uci-defaults 代码。
 
 ## 设置 PVE 网络
 
