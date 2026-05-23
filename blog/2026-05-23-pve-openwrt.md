@@ -306,7 +306,9 @@ onboot: 1
 net0: name=eth0,bridge=vmbr0,firewall=0,tag=20,type=veth
 net1: name=eth1,bridge=vmbr0,firewall=0,tag=10,type=veth
 lxc.apparmor.profile: unconfined
+lxc.cgroup2.devices.allow: c 10:200 rwm
 lxc.cgroup2.devices.allow: c 108:0 rwm
+lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file
 lxc.mount.entry: /dev/ppp dev/ppp none bind,create=file
 ```
 
@@ -316,6 +318,7 @@ PVE 宿主机上加载模块。
 
 ```bash
 cat >/etc/modules-load.d/openwrt-lxc-router.conf <<'EOF'
+tun
 ppp_generic
 pppoe
 pppox
