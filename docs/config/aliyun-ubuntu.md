@@ -874,7 +874,7 @@ sudo nano /opt/authelia/config/users_database.yml
 
 ```yaml
 users:
-  fallrain:
+  fallrain: # 用于登录的用户名，注意用用户名登录而不是邮箱！
     disabled: false
     displayname: "fallrain"
     password: "$argon2id$v=19$这里换成你的hash"
