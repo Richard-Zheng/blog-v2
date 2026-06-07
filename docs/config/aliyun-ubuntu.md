@@ -1163,7 +1163,7 @@ sudo mkdir -p /opt/headscale/config /opt/headscale/lib
 
 生成 Authelia OIDC Secret，配置 OIDC
 
-```
+```bash
 HEADSCALE_OIDC_SECRET="$(tr -dc A-Za-z0-9 </dev/urandom | head -c 64)"
 echo "$HEADSCALE_OIDC_SECRET" | sudo tee /opt/headscale/config/headscale_oidc_secret_plain
 chmod 600 /opt/headscale/config/headscale_oidc_secret_plain
@@ -1422,7 +1422,7 @@ oidc:
   enabled: true
   issuer: "https://auth.example.com"
   client_id: "headscale"
-  client_secret_path: "/run/secrets/headscale_oidc_secret_plain"
+  client_secret_path: "/run/secrets/headplane_oidc_secret_plain"
   token_endpoint_auth_method: "client_secret_basic"
   use_pkce: true
   disable_api_key_login: false
