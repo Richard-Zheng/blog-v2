@@ -1470,7 +1470,7 @@ hs.example.com {
     redir / /admin/ 302
 
     header {
-        Access-Control-Allow-Origin "https://hs.wchar.top"
+        Access-Control-Allow-Origin "https://hs.example.com"
         Access-Control-Allow-Headers "*"
         Access-Control-Allow-Methods "GET, POST, PUT, OPTIONS"
         Access-Control-Max-Age "100"
