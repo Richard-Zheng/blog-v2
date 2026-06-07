@@ -1371,8 +1371,9 @@ Volume=/opt/headplane/config.yaml:/etc/headplane/config.yaml:ro
 Volume=/opt/headplane/data:/var/lib/headplane
 Volume=/opt/headplane/secrets:/run/secrets:ro
 
-# 和 Headscale 容器内看到的路径一致
-Volume=/opt/headscale/config/config.yaml:/etc/headscale/config/config.yaml
+# 这两个路径要和 Headscale 容器内看到的路径一致
+Volume=/opt/headscale/config/config.yaml:/etc/headscale/config.yaml
+Volume=/opt/headscale/config/extra_records.json:/etc/headscale/extra_records.json
 
 # Podman socket 伪装成 Docker socket 给 Headplane 用
 # Volume=/run/podman/podman.sock:/var/run/docker.sock:ro
@@ -1407,7 +1408,7 @@ headscale:
   public_url: "https://hs.example.com"
 
   # 这个路径必须和 Headplane 容器内挂载路径一致
-  config_path: "/etc/headscale/config/config.yaml"
+  config_path: "/etc/headscale/config.yaml"
 
   # Headplane 后端使用的 API key
   api_key_path: "/run/secrets/headscale_api_key"
@@ -1416,7 +1417,7 @@ headscale:
   config_strict: false
 
   # 如果你 headscale config 里用了 dns.extra_records_path，再打开这个
-  # dns_records_path: "/etc/headscale/dns_records.json"
+  dns_records_path: "/etc/headscale/extra_records.json"
 
 oidc:
   enabled: true
