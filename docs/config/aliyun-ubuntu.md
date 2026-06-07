@@ -1209,6 +1209,9 @@ listen_addr: 127.0.0.1:8070
 metrics_listen_addr: 127.0.0.1:9080
 grpc_listen_addr: 127.0.0.1:50443
 grpc_allow_insecure: false
+trusted_proxies:
+  - 127.0.0.1/32
+  - ::1/128
 
 noise:
   private_key_path: /var/lib/headscale/noise_private.key
@@ -1452,11 +1455,22 @@ integration:
 Caddyfile 这样写
 
 ```
+http://hs.example.com {
+    # Tailscale captive portal detection
+    handle /generate_204 {
+        respond 204
+    }
+
+    handle * {
+        redir https://{host}{uri}
+    }
+}
+
 hs.example.com {
     redir / /admin/ 302
 
     header {
-        Access-Control-Allow-Origin "https://hs.example.com"
+        Access-Control-Allow-Origin "https://hs.wchar.top"
         Access-Control-Allow-Headers "*"
         Access-Control-Allow-Methods "GET, POST, PUT, OPTIONS"
         Access-Control-Max-Age "100"
@@ -1471,7 +1485,10 @@ hs.example.com {
     }
 
     handle {
-        reverse_proxy 127.0.0.1:8070
+        reverse_proxy 127.0.0.1:8070 {
+                header_up True-Client-IP {remote_host}
+                header_up X-Real-IP {remote_host}
+        }
     }
 }
 ```
