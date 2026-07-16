@@ -1,0 +1,8 @@
+{
+  "label": "Operating System",
+  "position": 4,
+  "link": {
+    "type": "generated-index",
+    "description": "MIT 6.1810 / NJU OS course notes"
+  }
+}
