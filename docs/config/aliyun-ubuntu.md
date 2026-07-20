@@ -169,7 +169,7 @@ LIMIT="${1:-50000000000}"
 
 result=$(
   vnstat -i eth0 -m --json \
-    | jq -r ".interfaces[0].traffic.month[0] | if .tx > $LIMIT then \"err\" else \"ok\" end"
+    | jq -r ".interfaces[0].traffic.month[-1] | if .tx > $LIMIT then \"err\" else \"ok\" end"
 )
 
 if [ "$result" != "ok" ]; then
