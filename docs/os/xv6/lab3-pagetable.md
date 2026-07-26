@@ -316,7 +316,7 @@ We can always demote when we encounter a superpage in `uvmunmap` and proceed as 
 
 Pitfalls I've fallen into:
 
-- Calling the regular page version of `kfree` to free a superpage physical address, specifically at `uvmunmap` when I first demoted a superpage, directly fill the superpages' `pa` to regular pages' PTE, then call `kfree` as before.
+- Calling the regular page version of `kfree` to free a superpage physical address, specifically at `uvmunmap` where a superpage is demoted but its content are not copied to regular pages, subsequently calling regular `kfree` on them is wrong.
 - Overly depending on Copilot inline suggestion feature, without carefully reading the code it generates.
 - Use the regular `kfree` in error handling without checking if it's handling a superpage.
 - Want to change the increment from `PGSIZE` to `SUPERPAGE_SIZE` in a for loop, but ultimately accidentally changed the increment to `PGSIZE + SUPERPAGE_SIZE`. (Well just always use while.)
