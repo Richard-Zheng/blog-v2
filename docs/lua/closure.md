@@ -1,8 +1,8 @@
 # Closure
 
-> Formally, each closure (= function) is a <proto,upvalues,env> triple, where proto is a compiled function skeleton (prototype), upvalues is an array of references (pointers) to external local variables used by the closure and env is a table used to look up the value of global variables.
+> When Lua compiles a function it generates a _prototype_ containing the virtual machine instructions for the function, its constant values (numbers, literal strings, etc.), and some debug information. At run time, whenever Lua executes a `function...end` expression, it creates a new _closure_. Each closure has a reference to its corresponding prototype, a reference to its _environment_ (a table wherein it looks for global variables), and an array of references to _upvalues_, which are used to access outer local variables.
 >
-> [Source](https://cellux.github.io/articles/introduction-to-luajit-part-1)
+> Functions and Closures - The Implementation of Lua 5.0
 
 在 Lua 5.1 中：`LClosure` 确实拥有一个独立的 `struct Table *env` 字段来专门存储当前函数所处的环境。在 Lua 5.2 及之后（包括现在的 5.4）：Lua 移除了独立的 env 字段，取消了全局环境的概念，转而引入了 _ENV 机制。全局环境变成了该函数的第一个 Upvalue（即 `upvals[0]`）。
 
