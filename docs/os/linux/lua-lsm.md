@@ -50,7 +50,7 @@ EOF
 chmod +x init
 
 # Pack into a CPIO archive
-find . | cpio -o -H newc | gzip > ../rootfs.cpio.gz
+find . | cpio -o -H newc | gzip > /tmp/lua-lsm-initramfs.cpio.gz
 ```
 
 ## 编译
@@ -201,69 +201,6 @@ VFS: Unable to mount root fs
 
 ### 4. 启动到可交互 Shell
 
-要测试 securityfs、加载 Lua 策略，需要 initramfs。你系统里的 `/usr/lib/initcpio/busybox` 很可能是 x86_64，不能放进 RISC-V rootfs：
-
-```bash
-file /usr/lib/initcpio/busybox
-```
-
-需要准备一个 RISC-V 静态 BusyBox。获得它之后，假设路径为：
-
-```text
-/path/to/riscv64-busybox
-```
-
-创建 initramfs：
-
-```bash
-INITRAMFS=/tmp/lua-lsm-initramfs
-
-mkdir -p "$INITRAMFS"/{bin,sbin,etc,proc,sys,dev,tmp}
-cp /path/to/riscv64-busybox "$INITRAMFS/bin/busybox"
-
-"$INITRAMFS/bin/busybox" --install -s "$INITRAMFS/bin"
-```
-
-最后一条不能在 x86 主机执行 RISC-V BusyBox。更简单的方法是手工建立必要链接：
-
-```bash
-ln -sf busybox "$INITRAMFS/bin/sh"
-ln -sf busybox "$INITRAMFS/bin/mount"
-ln -sf busybox "$INITRAMFS/bin/cat"
-ln -sf busybox "$INITRAMFS/bin/echo"
-ln -sf busybox "$INITRAMFS/bin/ls"
-ln -sf busybox "$INITRAMFS/bin/mkdir"
-```
-
-创建 `/init`：
-
-```sh
-#!/bin/sh
-
-mount -t proc proc /proc
-mount -t sysfs sysfs /sys
-mount -t devtmpfs devtmpfs /dev
-mount -t securityfs securityfs /sys/kernel/security
-
-echo "Lua securityfs:"
-ls -la /sys/kernel/security/lua
-
-exec /bin/sh
-```
-
-注意：根据项目文件编辑约束，实际在仓库协作中应使用补丁创建脚本；上面是你在终端手动操作时可直接采用的内容。
-
-赋予执行权限并打包：
-
-```bash
-chmod +x "$INITRAMFS/init"
-
-cd "$INITRAMFS"
-find . -print0 |
-    cpio --null -ov --format=newc |
-    gzip -9 > /tmp/lua-lsm-initramfs.cpio.gz
-```
-
 启动：
 
 ```bash
@@ -277,7 +214,30 @@ qemu-system-riscv64 \
     -append "console=ttyS0 earlycon=sbi rdinit=/init lsm=landlock,lockdown,yama,integrity,apparmor,lua,bpf"
 ```
 
-进入 shell 后检查：
+进入 shell 后创建挂载点并挂载：
+
+```sh
+mkdir -p /sys/kernel/security
+mount -t securityfs securityfs /sys/kernel/security
+```
+
+`/sys/kernel/security` 不是普通 sysfs 目录，它是 **securityfs 的挂载点**。
+
+检查：
+
+```sh
+mount
+ls -la /sys/kernel/security
+cat /sys/kernel/security/lsm
+```
+
+`/sys/kernel/security/lsm` 应该列出当前实际启用的 LSM，例如：
+
+```text
+capability,landlock,lockdown,yama,...
+```
+
+检查：
 
 ```sh
 cat /sys/kernel/security/lua/version
