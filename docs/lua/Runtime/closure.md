@@ -99,22 +99,48 @@ LClosure f
 
 ### Proto
 
-```c
-struct Proto *p;
-```
-
 `Proto` 是 Lua 函数编译后的静态描述，也可以理解为“函数原型”或“字节码模板”。
+
+```c
+/*
+** Function Prototypes
+*/
+typedef struct Proto {
+  CommonHeader;
+  lu_byte numparams;  /* number of fixed (named) parameters */
+  lu_byte flag;
+  lu_byte maxstacksize;  /* number of registers needed by this function */
+  int sizeupvalues;  /* size of 'upvalues' */
+  int sizek;  /* size of 'k' */
+  int sizecode;
+  int sizelineinfo;
+  int sizep;  /* size of 'p' */
+  int sizelocvars;
+  int sizeabslineinfo;  /* size of 'abslineinfo' */
+  int linedefined;  /* debug information  */
+  int lastlinedefined;  /* debug information  */
+  TValue *k;  /* constants used by the function */
+  Instruction *code;  /* opcodes */
+  struct Proto **p;  /* functions defined inside the function */
+  Upvaldesc *upvalues;  /* upvalue information */
+  ls_byte *lineinfo;  /* information about source lines (debug information) */
+  AbsLineInfo *abslineinfo;  /* idem */
+  LocVar *locvars;  /* information about local variables (debug information) */
+  TString  *source;  /* used for debug information */
+  GCObject *gclist;
+} Proto;
+```
 
 它通常包含：
 
-- 字节码指令
-- 常量表
-- 嵌套函数的 Proto
+- 字节码指令 `Instruction *code;`
+- 常量表 `TValue *k;`
+- 嵌套函数的 Proto `struct Proto **p;`
 - 局部变量调试信息
 - 源码行号信息
 - 参数数量
 - 是否为可变参数函数
-- 所需最大栈空间
+- 所需最大栈空间 aka. 最大寄存器数 `lu_byte maxstacksize;`
 - upvalue 描述信息
 
 例如：
@@ -158,7 +184,7 @@ function outer()
 end
 ```
 
-对 `inner` 来说：`x` 是它的 upvalue。
+当实例化 `inner` 时，`x` 是它的 upvalue。
 
 upvalue 有两种状态：
 
@@ -210,6 +236,10 @@ typedef struct Upvaldesc {
 在运行时执行 `OP_CLOSURE` 指令实例化 `inner`，代码位于 `luaV_execute`：
 
 ```c
+StkId base = ci->func.p + 1;
+LClosure *cl = ci_func(ci);
+// base 和 cl 都是 outer
+
 vmcase(OP_CLOSURE) {
   StkId ra = RA(i);
   Proto *p = cl->p->p[GETARG_Bx(i)];
@@ -218,6 +248,36 @@ vmcase(OP_CLOSURE) {
   vmbreak;
 }
 ```
+
+跟进去看 `pushclosure`：
+
+```c
+/*
+** create a new Lua closure, push it in the stack, and initialize
+** its upvalues.
+*/
+static void pushclosure (lua_State *L, Proto *p, UpVal **encup, StkId base,
+                         StkId ra) {
+  int nup = p->sizeupvalues;
+  Upvaldesc *uv = p->upvalues;
+  int i;
+  LClosure *ncl = luaF_newLclosure(L, nup);
+  ncl->p = p;
+  setclLvalue2s(L, ra, ncl);  /* anchor new closure in stack */
+  for (i = 0; i < nup; i++) {  /* fill in its upvalues */
+    if (uv[i].instack)  /* upvalue refers to local variable? */
+      ncl->upvals[i] = luaF_findupval(L, base + uv[i].idx);
+    else  /* get upvalue from enclosing function */
+      ncl->upvals[i] = encup[uv[i].idx];
+    luaC_objbarrier(L, ncl, ncl->upvals[i]);
+  }
+}
+```
+
+可见 for 循环负责填入新建的 `LClosure` 的 upvalue 指针数组。分为两种情况：
+
+- `instack`: upvalue 的值位于上一层函数栈上，调用 `luaF_findupval` 创建一个 `UpVal` 对象指向栈（或者如果已经有了指向此处的 upvalue 就直接使用）。
+- `!instack`: upvalue 指向上一层函数的 upvalue（如上二层或上 n 层函数的局部变量），从 `encup`(`cl->upvals`) 数组里取地址。
 
 ---
 
