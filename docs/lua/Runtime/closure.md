@@ -1,30 +1,20 @@
 # Closure
 
-> At compile time: when a function is compiled, it generates a **prototype** containing the virtual machine instructions for the function, its constant values (numbers, literal strings, etc.), and some debug information.
->
-> At run time: whenever Lua executes a `function...end` expression, it creates a new _closure_. Each closure has a reference to its corresponding **prototype**, a reference to its **environment** (a table wherein it looks for global variables), and an array of references to **upvalues**, which are used to access outer local variables.
->
-> Functions and Closures - The Implementation of Lua 5.0
+Lua 的 Closure 有两种：
 
-由此可知，lua 的 closure 由三部分组成：
+- LClosure: Lua Closure, Lua 源码编译出来的函数
+- CClosure: C Closure, C 语言实现、注册给 Lua 的函数
 
-- Proto：函数源码编译出的 VM 机器码、常量表等信息
-- Upvalues：函数内引用的外层函数临时变量
-- Env：全局变量
-
-在 Lua 5.1 中：`LClosure` 确实拥有一个独立的 `struct Table *env` 字段来专门存储当前函数所处的环境。在 Lua 5.2 及之后：Lua 移除了独立的 env 字段，取消了全局环境的概念，转而引入了 _ENV 机制。全局环境变成了该函数的第一个 Upvalue（即 `upvals[0]`）。
-
-对 Lua 函数来说，closure 基本就是 `Proto + upvalues`；但 Lua 同时支持用 C 实现的函数，因此源码里有 `LClosure` 和 `CClosure` 两种闭包。
-
-这里的结构设计就是为了统一表示：
-
-```text
-Closure
-├── LClosure：Lua 源码编译出来的函数
-└── CClosure：C 语言实现、注册给 Lua 的函数
+```c
+typedef union Closure {
+  CClosure c;
+  LClosure l;
+} Closure;
 ```
 
-## 1. 头部 `ClosureHeader` (GC 辅助)
+## 1. 共用头部 `ClosureHeader`
+
+用于辅助 gc 过程。
 
 ```c
 #define ClosureHeader \
@@ -59,6 +49,22 @@ GCObject *gclist;
 ---
 
 ## 2. LClosure
+
+> At compile time: when a function is compiled, it generates a **prototype** containing the virtual machine instructions for the function, its constant values (numbers, literal strings, etc.), and some debug information.
+>
+> At run time: whenever Lua executes a `function...end` expression, it creates a new _closure_. Each closure has a reference to its corresponding **prototype**, a reference to its **environment** (a table wherein it looks for global variables), and an array of references to **upvalues**, which are used to access outer local variables.
+>
+> Functions and Closures - The Implementation of Lua 5.0
+
+由此可知，lua 的 closure 由三部分组成：
+
+- Proto：函数源码编译出的 VM 机器码、常量表等信息
+- Upvalues：函数内引用的外层函数临时变量
+- Env：全局变量
+
+在 Lua 5.1 中：`LClosure` 确实拥有一个独立的 `struct Table *env` 字段来专门存储当前函数所处的环境。在 Lua 5.2 及之后：Lua 移除了独立的 env 字段，取消了全局环境的概念，转而引入了 _ENV 机制。全局环境变成了该函数的第一个 Upvalue（即 `upvals[0]`）。
+
+对 Lua 函数来说，closure 基本就是 `Proto + upvalues`；但 Lua 同时支持用 C 实现的函数，因此源码里有 `LClosure` 和 `CClosure` 两种闭包。
 
 ```c
 typedef struct LClosure {
@@ -332,69 +338,7 @@ Proto + upvalues
 
 其实是对应关系。
 
----
-
-# 4. 为什么 `LClosure` 不能只有 `Proto`
-
-考虑：
-
-```lua
-function make_counter()
-    local count = 0
-
-    return function()
-        count = count + 1
-        return count
-    end
-end
-
-local a = make_counter()
-local b = make_counter()
-```
-
-`a` 和 `b` 使用相同的函数代码，因此可以共享同一个 `Proto`：
-
-```text
-                  ┌───────────────┐
-a.p ─────────────→│ 相同的 Proto   │
-b.p ─────────────→│ count=count+1 │
-                  └───────────────┘
-```
-
-但它们捕获的是两次不同调用中的 `count`：
-
-```text
-a.upvals[0] → count = 0
-b.upvals[0] → count = 0
-```
-
-调用：
-
-```lua
-a()  --> 1
-a()  --> 2
-b()  --> 1
-```
-
-所以：
-
-```text
-Proto = 共享的函数代码
-LClosure = 一次具体的函数实例
-UpVal = 该实例捕获的变量
-```
-
-这正是你说的：
-
-```text
-closure = Proto + upvalues
-```
-
-只是源码还必须进一步支持 C 函数闭包。
-
----
-
-# 5. 为什么两种 upvalue 类型不同
+### 为什么两种 upvalue 类型不同
 
 这是最值得注意的差异：
 
@@ -408,7 +352,7 @@ LClosure:
 
 C closure 直接存储 `TValue`，Lua closure 则存储 `UpVal *`。
 
-## CClosure 直接保存值
+#### CClosure 直接保存值
 
 ```c
 TValue upvalue[1];
@@ -428,7 +372,7 @@ CClosure.upvalue[0]
 
 它不需要保持与某个 Lua 局部变量栈槽的共享关系。
 
-## LClosure 保存 `UpVal *`
+#### LClosure 保存 `UpVal *`
 
 Lua 闭包捕获的是“变量”，不只是捕获当时的值。
 
@@ -478,225 +422,3 @@ UpVal
 ```
 
 这也是 CClosure 和 LClosure 结构不同的根本原因。
-
----
-
-# 6. open 和 closed upvalue
-
-在外层函数还没返回时：
-
-```lua
-function outer()
-    local x = 10
-
-    return function()
-        return x
-    end
-end
-```
-
-内部闭包刚创建时，`x` 还在 `outer` 的 Lua 栈上：
-
-```text
-LClosure.upvals[0]
-        │
-        ▼
-      UpVal
-        │
-        ▼
-outer 的栈槽 x
-```
-
-这叫 open upvalue。
-
-当 `outer` 返回后，栈槽即将失效。Lua 会把值搬进 `UpVal` 自己的存储空间：
-
-```text
-LClosure.upvals[0]
-        │
-        ▼
-      UpVal
-        │
-        ▼
-UpVal 内部保存的 TValue
-```
-
-这叫 closed upvalue。
-
-闭包仍然引用同一个 `UpVal`，所以不用修改每个 `LClosure`。
-
----
-
-# 7. `upvalue[1]` 为什么只有一个
-
-```c
-TValue upvalue[1];
-UpVal *upvals[1];
-```
-
-这个 `[1]` 并不代表闭包最多只有一个 upvalue。
-
-这是传统 C 语言中实现“可变长结构体”的技巧。创建时会额外分配内存。
-
-逻辑上相当于现代 C 的柔性数组：
-
-```c
-TValue upvalue[];
-```
-
-假设需要三个 upvalue，实际内存会按类似公式分配：
-
-```c
-sizeof(CClosure)
-    + 2 * sizeof(TValue)
-```
-
-因为结构体本身已经为第一个元素预留了空间。
-
-实际内存：
-
-```text
-CClosure
-+--------------+
-| 公共头       |
-+--------------+
-| f            |
-+--------------+
-| upvalue[0]   |  结构声明中的 [1]
-+--------------+
-| upvalue[1]   |  额外分配
-+--------------+
-| upvalue[2]   |  额外分配
-+--------------+
-```
-
-`nupvalues` 告诉 Lua 实际有多少个：
-
-```c
-cl->nupvalues == 3
-```
-
-Lua 使用这种写法主要是为了兼容不同 C 标准和编译环境。
-
----
-
-# 8. `union Closure` 是什么
-
-```c
-typedef union Closure {
-    CClosure c;
-    LClosure l;
-} Closure;
-```
-
-它表示“一个闭包要么是 CClosure，要么是 LClosure”。
-
-```text
-Closure
-┌───────────────────┐
-│ CClosure c         │
-│        或          │
-│ LClosure l         │
-└───────────────────┘
-```
-
-union 的成员共享同一段起始内存：
-
-```c
-Closure *cl;
-
-cl->c.nupvalues;
-cl->l.nupvalues;
-```
-
-因为两种结构都有相同的 `ClosureHeader`，所以访问公共头时具有相同布局。
-
-概念上：
-
-```text
-CClosure 内存：
-[CommonHeader][nupvalues][gclist][f][TValue...]
-
-LClosure 内存：
-[CommonHeader][nupvalues][gclist][p][UpVal*...]
-```
-
-运行时通过 `tt` 判断具体是哪一种：
-
-```text
-tt = Lua closure  → 使用 cl->l
-tt = C closure    → 使用 cl->c
-```
-
-union 主要提供：
-
-- 统一的闭包类型名称
-- 正确的内存对齐
-- 方便在公共代码里操作闭包
-- 允许先查看公共头，再根据 `tt` 解释剩余字段
-
-它并不表示每个 Closure 同时包含一份完整的 `CClosure` 和 `LClosure`。
-
----
-
-# 9. 三种容易混淆的“函数”
-
-Lua 内部至少要区分：
-
-### 裸 C 函数指针
-
-```c
-lua_CFunction f;
-```
-
-只是一个 C 地址：
-
-```text
-f → add()
-```
-
-### C closure
-
-```c
-CClosure
-├── lua_CFunction f
-└── TValue upvalues[]
-```
-
-即：
-
-```text
-C函数 + 捕获值
-```
-
-### Lua closure
-
-```c
-LClosure
-├── Proto *p
-└── UpVal *upvals[]
-```
-
-即：
-
-```text
-Lua字节码原型 + 捕获变量
-```
-
-对应关系非常整齐：
-
-| 类型 | 可执行代码 | 捕获内容 |
-|---|---|---|
-| `CClosure` | `lua_CFunction f` | 内嵌 `TValue[]` |
-| `LClosure` | `Proto *p` | `UpVal *[]` |
-
-所以最准确的总结是：
-
-```text
-Closure = 可执行代码 + 捕获环境
-
-LClosure = Proto + UpVal*
-CClosure = lua_CFunction + TValue
-```
-
-你原先的“closure 就是 proto + upvals”正是 `LClosure` 的定义；Lua 源码之所以显得更复杂，是因为虚拟机还要把 C 函数作为一等函数值统一管理。
