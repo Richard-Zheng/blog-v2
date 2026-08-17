@@ -11,15 +11,10 @@ CommonHeader 是所有可回收对象的公共头部，定义在 `lobject.h` 中
 ** Common Header for all collectable objects (in macro form, to be
 ** included in other objects)
 */
-#define CommonHeader	struct GCObject *next; lu_byte tt; lu_byte marked
-```
-
-展开来就是
-
-```c
-struct GCObject *next;
-lu_byte tt;
-lu_byte marked;
+#define CommonHeader \
+  struct GCObject *next; \
+  lu_byte tt; \
+  lu_byte marked
 ```
 
 - `next`：连接到所有 GC 对象链表

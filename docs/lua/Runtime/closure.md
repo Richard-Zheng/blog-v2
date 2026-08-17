@@ -18,7 +18,9 @@ typedef union Closure {
 
 ```c
 #define ClosureHeader \
-    CommonHeader; lu_byte nupvalues; GCObject *gclist
+  CommonHeader; \
+  lu_byte nupvalues; \
+  GCObject *gclist
 ```
 
 CommonHeader 见 gc 部分介绍。
