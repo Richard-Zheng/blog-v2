@@ -1,10 +1,18 @@
 # Closure
 
-> When Lua compiles a function it generates a _prototype_ containing the virtual machine instructions for the function, its constant values (numbers, literal strings, etc.), and some debug information. At run time, whenever Lua executes a `function...end` expression, it creates a new _closure_. Each closure has a reference to its corresponding prototype, a reference to its _environment_ (a table wherein it looks for global variables), and an array of references to _upvalues_, which are used to access outer local variables.
+> At compile time: when a function is compiled, it generates a **prototype** containing the virtual machine instructions for the function, its constant values (numbers, literal strings, etc.), and some debug information.
+>
+> At run time: whenever Lua executes a `function...end` expression, it creates a new _closure_. Each closure has a reference to its corresponding **prototype**, a reference to its **environment** (a table wherein it looks for global variables), and an array of references to **upvalues**, which are used to access outer local variables.
 >
 > Functions and Closures - The Implementation of Lua 5.0
 
-在 Lua 5.1 中：`LClosure` 确实拥有一个独立的 `struct Table *env` 字段来专门存储当前函数所处的环境。在 Lua 5.2 及之后（包括现在的 5.4）：Lua 移除了独立的 env 字段，取消了全局环境的概念，转而引入了 _ENV 机制。全局环境变成了该函数的第一个 Upvalue（即 `upvals[0]`）。
+由此可知，lua 的 closure 由三部分组成：
+
+- Proto：函数源码编译出的 VM 机器码、常量表等信息
+- Upvalues：函数内引用的外层函数临时变量
+- Env：全局变量
+
+在 Lua 5.1 中：`LClosure` 确实拥有一个独立的 `struct Table *env` 字段来专门存储当前函数所处的环境。在 Lua 5.2 及之后：Lua 移除了独立的 env 字段，取消了全局环境的概念，转而引入了 _ENV 机制。全局环境变成了该函数的第一个 Upvalue（即 `upvals[0]`）。
 
 对 Lua 函数来说，closure 基本就是 `Proto + upvalues`；但 Lua 同时支持用 C 实现的函数，因此源码里有 `LClosure` 和 `CClosure` 两种闭包。
 
@@ -16,53 +24,14 @@ Closure
 └── CClosure：C 语言实现、注册给 Lua 的函数
 ```
 
-## 1. 公共头部 `ClosureHeader`
+## 1. 头部 `ClosureHeader` (GC 辅助)
 
 ```c
 #define ClosureHeader \
     CommonHeader; lu_byte nupvalues; GCObject *gclist
 ```
 
-展开 `CommonHeader` 后，大致相当于：
-
-```c
-GCObject *next;
-lu_byte tt;
-lu_byte marked;
-
-lu_byte nupvalues;
-GCObject *gclist;
-```
-
-也就是说，无论是 `CClosure` 还是 `LClosure`，开头的内存布局都相同：
-
-```text
-+-----------+
-| next      |  GC 链表
-+-----------+
-| tt        |  对象类型：Lua closure / C closure
-+-----------+
-| marked    |  GC 标记和年龄
-+-----------+
-| nupvalues |  upvalue 数量
-+-----------+
-| gclist    |  GC 临时链表
-+-----------+
-```
-
-### `CommonHeader`
-
-闭包是可垃圾回收对象，因此需要 GC 公共头：
-
-```c
-GCObject *next;
-lu_byte tt;
-lu_byte marked;
-```
-
-- `next`：连接到所有 GC 对象链表
-- `tt`：说明这是 Lua closure 还是 C closure
-- `marked`：GC 标记状态以及分代年龄
+CommonHeader 见 gc 部分介绍。
 
 ### `nupvalues`
 
@@ -89,7 +58,162 @@ GCObject *gclist;
 
 ---
 
-# 2. `CClosure`
+## 2. LClosure
+
+```c
+typedef struct LClosure {
+    ClosureHeader;
+    struct Proto *p;
+    UpVal *upvals[1];
+} LClosure;
+```
+
+它表示 Lua 源码中的函数闭包。
+
+例如：
+
+```lua
+local x = 10
+
+local function f()
+    return x
+end
+```
+
+`f` 对应一个 `LClosure`：
+
+```text
+LClosure f
+├── p          → 函数的 Proto
+├── nupvalues  = 1
+└── upvals[0]  → 保存或引用变量 x 的 UpVal
+```
+
+### Proto
+
+```c
+struct Proto *p;
+```
+
+`Proto` 是 Lua 函数编译后的静态描述，也可以理解为“函数原型”或“字节码模板”。
+
+它通常包含：
+
+- 字节码指令
+- 常量表
+- 嵌套函数的 Proto
+- 局部变量调试信息
+- 源码行号信息
+- 参数数量
+- 是否为可变参数函数
+- 所需最大栈空间
+- upvalue 描述信息
+
+例如：
+
+```lua
+local function add(a, b)
+    return a + b
+end
+```
+
+它的 `Proto` 大致表达：
+
+```text
+参数数量：2
+最大寄存器数：若干
+常量表：可能为空
+字节码：
+    ADD
+    RETURN
+```
+
+但是 `Proto` 不表示一次具体的闭包实例，因为它没有绑定本次捕获的外部变量。
+
+### UpVal
+
+为什么是 `UpVal *upvals[1];` 长度为 1 的指针数组？其实 `LClosure` 是个可变长结构体，实际 `upvals` 数组长度为 `nupvalues`。写成这样是为了兼容不同 C 标准和编译器。
+
+Lua 中，一个函数引用的、定义在外层 lexical scope 中的局部变量，就是它的 upvalue。
+
+例如：
+
+```lua
+function outer()
+    local x = 42
+
+    local function inner()
+        return x
+    end
+
+    return inner
+end
+```
+
+对 `inner` 来说：`x` 是它的 upvalue。
+
+upvalue 有两种状态：
+
+- open：`outer` 函数还没返回，`x` 还在 `outer` 的栈上，upvalue 直接指向栈上内存。
+- closed：`outer` 函数返回后，`x` 的栈内存失效，失效前把值搬到 upvalue 自己的内部空间。
+
+```c
+/*
+** Upvalues for Lua closures
+*/
+typedef struct UpVal {
+  CommonHeader;
+  union {
+    TValue *p;  /* points to stack or to its own value */
+    ptrdiff_t offset;  /* used while the stack is being reallocated */
+  } v;
+  union {
+    struct {  /* (when open) */
+      struct UpVal *next;  /* linked list */
+      struct UpVal **previous;
+    } open;
+    TValue value;  /* the value (when closed) */
+  } u;
+} UpVal;
+```
+
+通常访问 upvalue 内的 TValue(Typed Value) 的方式是：
+
+```c
+LClosure *cl = ...;  // 当前闭包
+int i = ...;       // upvalue 索引, 从指令中解码
+TValue *upval = cl->upvals[i]->v.p;
+```
+
+`inner` 函数的 `Proto.upvalues[]` 是 `struct Upvaldesc []` 类型，记录了 upvalue 的编译期信息：
+
+```c
+/*
+** Description of an upvalue for function prototypes
+*/
+typedef struct Upvaldesc {
+  TString *name;  /* upvalue name (for debug information) */
+  lu_byte instack;  /* whether it is in stack (register) */
+  lu_byte idx;  /* index of upvalue (in stack or in outer function's list) */
+  lu_byte kind;  /* kind of corresponding variable */
+} Upvaldesc;
+```
+
+在运行时执行 `OP_CLOSURE` 指令实例化 `inner`，代码位于 `luaV_execute`：
+
+```c
+vmcase(OP_CLOSURE) {
+  StkId ra = RA(i);
+  Proto *p = cl->p->p[GETARG_Bx(i)];
+  halfProtect(pushclosure(L, p, cl->upvals, base, ra));
+  checkGC(L, ra + 1);
+  vmbreak;
+}
+```
+
+---
+
+## 3. CClosure
 
 ```c
 typedef struct CClosure {
@@ -101,23 +225,7 @@ typedef struct CClosure {
 
 它表示一个由 C 函数实现的 Lua 闭包。
 
-展开后可以理解为：
-
-```c
-typedef struct CClosure {
-    GCObject *next;
-    lu_byte tt;
-    lu_byte marked;
-
-    lu_byte nupvalues;
-    GCObject *gclist;
-
-    lua_CFunction f;
-    TValue upvalue[1];
-} CClosure;
-```
-
-## `lua_CFunction f`
+### `lua_CFunction f`
 
 ```c
 lua_CFunction f;
@@ -165,7 +273,7 @@ CClosure
 └── upvalue = 无
 ```
 
-## C 函数也可以有 upvalue
+### C 函数也可以有 upvalue
 
 例如：
 
@@ -223,80 +331,6 @@ Proto + upvalues
 ```
 
 其实是对应关系。
-
----
-
-# 3. `LClosure`
-
-```c
-typedef struct LClosure {
-    ClosureHeader;
-    struct Proto *p;
-    UpVal *upvals[1];
-} LClosure;
-```
-
-它表示 Lua 源码中的函数闭包。
-
-例如：
-
-```lua
-local x = 10
-
-local function f()
-    return x
-end
-```
-
-`f` 对应一个 `LClosure`：
-
-```text
-LClosure f
-├── p          → 函数的 Proto
-├── nupvalues  = 1
-└── upvals[0]  → 保存或引用变量 x 的 UpVal
-```
-
-## `Proto *p`
-
-```c
-struct Proto *p;
-```
-
-`Proto` 是 Lua 函数编译后的静态描述，也可以理解为“函数原型”或“字节码模板”。
-
-它通常包含：
-
-- 字节码指令
-- 常量表
-- 嵌套函数的 Proto
-- 局部变量调试信息
-- 源码行号信息
-- 参数数量
-- 是否为可变参数函数
-- 所需最大栈空间
-- upvalue 描述信息
-
-例如：
-
-```lua
-local function add(a, b)
-    return a + b
-end
-```
-
-它的 `Proto` 大致表达：
-
-```text
-参数数量：2
-最大寄存器数：若干
-常量表：可能为空
-字节码：
-    ADD
-    RETURN
-```
-
-但是 `Proto` 不表示一次具体的闭包实例，因为它没有绑定本次捕获的外部变量。
 
 ---
 
