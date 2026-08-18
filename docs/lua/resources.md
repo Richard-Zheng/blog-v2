@@ -12,4 +12,6 @@
 
 [A Look at the Design of Lua](https://cacm.acm.org/research/a-look-at-the-design-of-lua/)
 
+[Lua - Yuerer's Blog](https://yuerer.com/categories/Lua/)
+
 [用 Rust 实现 Lua 解释器](https://wubingzheng.github.io/build-lua-in-rust/zh/)
