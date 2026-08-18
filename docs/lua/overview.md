@@ -14,173 +14,12 @@ local a=10; local b=20; print(a+b)
 set pagination off
 set debuginfod enabled off
 
+# 下文会用到的 GDB Python 脚本
 source lua_gdb.py
 
 break lua_newstate
 break preinit_thread
 run -e "local a=10; local b=20; print(a+b)"
-```
-
-Python 脚本 `lua_gdb.py`：
-
-```python
-import gdb
-
-
-OPNAMES = [
-    "MOVE", "LOADI", "LOADF", "LOADK", "LOADKX", "LOADFALSE",
-    "LFALSESKIP", "LOADTRUE", "LOADNIL", "GETUPVAL", "SETUPVAL",
-    "GETTABUP", "GETTABLE", "GETI", "GETFIELD", "SETTABUP",
-    "SETTABLE", "SETI", "SETFIELD", "NEWTABLE", "SELF", "ADDI",
-    "ADDK", "SUBK", "MULK", "MODK", "POWK", "DIVK", "IDIVK",
-    "BANDK", "BORK", "BXORK", "SHLI", "SHRI", "ADD", "SUB",
-    "MUL", "MOD", "POW", "DIV", "IDIV", "BAND", "BOR", "BXOR",
-    "SHL", "SHR", "MMBIN", "MMBINI", "MMBINK", "UNM", "BNOT",
-    "NOT", "LEN", "CONCAT", "CLOSE", "TBC", "JMP", "EQ", "LT",
-    "LE", "EQK", "EQI", "LTI", "LEI", "GTI", "GEI", "TEST",
-    "TESTSET", "CALL", "TAILCALL", "RETURN", "RETURN0", "RETURN1",
-    "FORLOOP", "FORPREP", "TFORPREP", "TFORCALL", "TFORLOOP",
-    "SETLIST", "CLOSURE", "VARARG", "GETVARG", "ERRNNIL",
-    "VARARGPREP", "EXTRAARG",
-]
-
-MODE_NAMES = ["ABC", "vABC", "ABx", "AsBx", "Ax", "sJ"]
-
-
-def _field(expr):
-    return gdb.parse_and_eval(expr)
-
-
-def _decode_instruction(raw):
-    op = raw & 0x7f
-    a = (raw >> 7) & 0xff
-    k = (raw >> 15) & 1
-    b = (raw >> 16) & 0xff
-    c = (raw >> 24) & 0xff
-    vb = (raw >> 16) & 0x3f
-    vc = (raw >> 22) & 0x3ff
-    bx = (raw >> 15) & 0x1ffff
-    ax = (raw >> 7) & 0x1ffffff
-    mode = int(_field("luaP_opmodes")[op]) & 7
-    name = OPNAMES[op] if op < len(OPNAMES) else "OP?"
-    if mode == 0:
-        args = f"A={a} B={b} C={c} k={k}"
-    elif mode == 1:
-        args = f"A={a} vB={vb} vC={vc} k={k}"
-    elif mode == 2:
-        args = f"A={a} Bx={bx}"
-    elif mode == 3:
-        args = f"A={a} sBx={bx - 65535}"
-    elif mode == 4:
-        args = f"Ax={ax}"
-    else:
-        args = f"sJ={ax - 16777215}"
-    return name, MODE_NAMES[mode], args
-
-
-def _tvalue_text(tv):
-    tag = int(tv["tt_"])
-    kind = tag & 0x0f
-    variant = (tag >> 4) & 3
-    value = tv["value_"]
-    try:
-        if kind == 0:
-            return "nil"
-        if kind == 1:
-            return "true" if variant == 1 else "false"
-        if kind == 2:
-            return f"lightuserdata({value['p']})"
-        if kind == 3:
-            return str(value["n"] if variant == 1 else value["i"])
-        if kind == 4:
-            ts = value["gc"].cast(gdb.lookup_type("TString").pointer())
-            return '"' + ts["contents"].string(errors="replace") + '"'
-        if kind == 5:
-            return f"table({value['gc']})"
-        if kind == 6:
-            names = {0: "LuaClosure", 1: "CFunction", 2: "CClosure"}
-            ptr = value["f"] if variant == 1 else value["gc"]
-            return f"{names.get(variant, 'function')}({ptr})"
-        if kind == 7:
-            return f"userdata({value['gc']})"
-        if kind == 8:
-            return f"thread({value['gc']})"
-    except gdb.error:
-        pass
-    return f"tag=0x{tag:x}"
-
-
-class LuaInsn(gdb.Command):
-    def __init__(self):
-        super().__init__("lua-insn", gdb.COMMAND_DATA)
-
-    def invoke(self, arg, from_tty):
-        try:
-            raw = int(_field("i"))
-            pc = _field("pc")
-            code = _field("cl->p->code")
-            index = int(pc - code) - 1
-            name, mode, args = _decode_instruction(raw)
-            gdb.write(f"bytecode pc={index + 1}  {name:<12} {args}  [{mode}]\n")
-        except gdb.error as exc:
-            gdb.write(f"lua-insn: stop inside luaV_execute after vmfetch ({exc})\n")
-
-
-class LuaStack(gdb.Command):
-    def __init__(self):
-        super().__init__("lua-stack", gdb.COMMAND_DATA)
-
-    def invoke(self, arg, from_tty):
-        try:
-            base = _field("base")
-            size = int(_field("cl->p->maxstacksize"))
-            top = _field("L->top.p")
-            gdb.write(f"registers: base={base}, logical top={top}, max={size}\n")
-            for index in range(size):
-                slot = (base + index).dereference()["val"]
-                marker = " <top" if base + index == top else ""
-                gdb.write(f"  R[{index:<2}] {_tvalue_text(slot)}{marker}\n")
-        except gdb.error as exc:
-            gdb.write(f"lua-stack: no active Lua VM frame ({exc})\n")
-
-
-class LuaFrames(gdb.Command):
-    def __init__(self):
-        super().__init__("lua-frames", gdb.COMMAND_DATA)
-
-    def invoke(self, arg, from_tty):
-        try:
-            ci = _field("L->ci")
-            depth = 0
-            while int(ci) != 0 and depth < 32:
-                frame = ci.dereference()
-                status = int(frame["callstatus"])
-                flavor = "C" if status & (1 << 15) else "Lua"
-                funcslot = frame["func"]["p"].dereference()["val"]
-                gdb.write(
-                    f"  #{depth} {flavor:<3} ci={ci} func={_tvalue_text(funcslot)}\n"
-                )
-                ci = frame["previous"]
-                depth += 1
-        except gdb.error as exc:
-            gdb.write(f"lua-frames: cannot inspect frames ({exc})\n")
-
-
-class LuaState(gdb.Command):
-    def __init__(self):
-        super().__init__("lua-state", gdb.COMMAND_DATA)
-
-    def invoke(self, arg, from_tty):
-        gdb.execute("lua-insn")
-        gdb.execute("lua-frames")
-        gdb.execute("lua-stack")
-
-
-LuaInsn()
-LuaStack()
-LuaFrames()
-LuaState()
-gdb.write("Loaded Lua helpers: lua-insn, lua-stack, lua-frames, lua-state\n")
 ```
 
 编译命令：
@@ -222,6 +61,8 @@ int main (int argc, char **argv) {
   return (result && status == LUA_OK) ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 ```
+
+### lua_State
 
 lua_State 是一条 Lua thread 的上下文，包含了执行 Lua 字节码所需的所有状态信息。几乎所有 Lua 函数第一个参数都是它。Lua 官方并不支持真正的多线程，但是可以在单个操作系统线程上协作式地并发执行多个 Lua thread.
 
@@ -316,9 +157,27 @@ l_noret luaD_throw (lua_State *L, TStatus errcode) {
 
 此时会恢复前面保存的上下文跳转回 `luaD_rawrunprotected`，不同的是 setjmp 返回值不再是 0，而是 1，表示发生了错误，返回 `errcode`。
 
-这些初始化函数里比较值得拿出来说的是 `stack_init(L1, L)`, 它会 call `L`(的全局状态) 中的 `frealloc` 函数为 `L1->stack` 分配堆内存，失败时使用 `L->errorJmp` 进行错误处理，并初始化基础调用帧。
+这些初始化函数里比较值得拿出来说的是 `stack_init(L1, L)`, 它会 call `L`(的全局状态) 中的 `frealloc` 函数为 `L1->stack` 分配堆内存，失败时使用 `L->errorJmp` 进行错误处理，并初始化第一个调用帧 `CallInfo`。
+
+这里有必要说明一点：Lua 虚拟机内部有两套函数运行的上下文：
+
+- 栈，每个 `lua_State` 都有一整块连续内存作为栈，每个函数拥有自己的一段栈区域。栈同时还是寄存器。VM 中 `R[A]` 就是指现在运行的函数的栈里的第 A 个位置（如果算上函数栈开头的 `Closure*` 的话，就是第 A + 1 个）。
+- `CallInfo` 链表节点。每次调用函数就向链表头部 push 一个节点，函数返回时 pop 掉。
+
+Closure 对象是什么？是一个函数的实例，它既包含函数在编译期就确定的信息（如字节码，用到的寄存器数量等），也包含函数在运行时的状态（如引用的外部变量）。函数是 Lua 的 first-class 类型，在 Lua 中给变量赋值为一个函数时，实际上操作的也是 Closure 对象。
 
 ```c
+static void resetCI (lua_State *L) {
+  CallInfo *ci = L->ci = &L->base_ci;
+  ci->func.p = L->stack.p;
+  setnilvalue2s(ci->func.p);  /* 'function' entry for basic 'ci' */
+  ci->top.p = ci->func.p + 1 + LUA_MINSTACK;  /* +1 for 'function' entry */
+  ci->u.c.k = NULL;
+  ci->callstatus = CIST_C;
+  L->status = LUA_OK;
+  L->errfunc = 0;  /* stack unwind can "throw away" the error function */
+}
+
 static void stack_init (lua_State *L1, lua_State *L) {
   int i;
   /* initialize stack array */
@@ -332,3 +191,227 @@ static void stack_init (lua_State *L1, lua_State *L) {
   L1->top.p = L1->stack.p + 1;  /* +1 for 'function' entry */
 }
 ```
+
+因此，这里既初始化了栈，也初始化了第一个 `CallInfo` 节点。此节点位于 lua_State 的 `base_ci` 字段中，在 `resetCI` 中被设置为 `L->ci` 链表的头节点。`ci->func.p` 指向函数调用栈区域的第一个位置，为这个函数的 Closure 对象。但是第一个函数在概念上表示 `main` C 函数，没有对应的 Closure, 指向的栈里面为 nil。
+
+```c
+ci->func.p = L->stack.p;
+setnilvalue2s(ci->func.p);
+```
+
+我们可以写一个脚本验证：
+
+```python
+import gdb
+
+def _field(expr):
+  return gdb.parse_and_eval(expr)
+
+def _tvalue_text(tv):
+  tag = int(tv["tt_"])
+  kind = tag & 0x0f
+  variant = (tag >> 4) & 3
+  value = tv["value_"]
+  try:
+    if kind == 0:
+      return "nil"
+    if kind == 1:
+      return "true" if variant == 1 else "false"
+    if kind == 2:
+      return f"lightuserdata({value['p']})"
+    if kind == 3:
+      return str(value["n"] if variant == 1 else value["i"])
+    if kind == 4:
+      ts = value["gc"].cast(gdb.lookup_type("TString").pointer())
+      return '"' + ts["contents"].string(errors="replace") + '"'
+    if kind == 5:
+      return f"table({value['gc']})"
+    if kind == 6:
+      names = {0: "LuaClosure", 1: "CFunction", 2: "CClosure"}
+      ptr = value["f"] if variant == 1 else value["gc"]
+      return f"{names.get(variant, 'function')}({ptr})"
+    if kind == 7:
+      return f"userdata({value['gc']})"
+    if kind == 8:
+      return f"thread({value['gc']})"
+  except gdb.error:
+    pass
+  return f"tag=0x{tag:x}"
+
+class LuaFrames(gdb.Command):
+  def __init__(self):
+    super().__init__("lua-frames", gdb.COMMAND_DATA)
+
+  def invoke(self, arg, from_tty):
+    try:
+      ci = _field("L->ci")
+      depth = 0
+      while int(ci) != 0 and depth < 32:
+        frame = ci.dereference()
+        status = int(frame["callstatus"])
+        flavor = "C" if status & (1 << 15) else "Lua"
+        funcslot = frame["func"]["p"].dereference()["val"]
+        gdb.write(
+          f"  #{depth} {flavor:<3} ci={ci} func={_tvalue_text(funcslot)}\n"
+        )
+        ci = frame["previous"]
+        depth += 1
+    except gdb.error as exc:
+      gdb.write(f"lua-frames: cannot inspect frames ({exc})\n")
+
+LuaFrames()
+```
+
+在 `stack_init` 的最后一行打断点：
+
+```gdb
+break lstate.c:173
+```
+
+
+使用 `lua-frames` 查看当前的 `CallInfo` 链表。
+
+```
+Breakpoint 1, stack_init (L1=0x5555555b1598, L=0x5555555b1598) at lstate.c:173
+173	  L1->top.p = L1->stack.p + 1;  /* +1 for 'function' entry */
+(gdb) lua-frames
+  #0 C   ci=0x5555555b15f8 func=nil
+```
+
+### pmain
+
+有了 `lua_State` 后，就可以按照标准的 Lua 调用 C 函数那样调用 `pmain` 了：
+
+p 意为 protected，也即有错误处理，上文已提及。
+
+```c
+lua_pushcfunction(L, &pmain);  /* to call 'pmain' in protected mode */
+lua_pushinteger(L, argc);  /* 1st argument */
+lua_pushlightuserdata(L, argv); /* 2nd argument */
+```
+
+push C function, push 的是什么呢？就是 Closure!
+
+```c
+#define lua_pushcfunction(L,f)	lua_pushcclosure(L, (f), 0)
+```
+
+如此一来，`pmain` 就被包装成了一个 `CClosure` 对象，放在栈里的第一个位置。
+
+向 `lua_gdb.py` 添加一个新的命令 `lua-stack`，可以查看栈内容：
+
+```py
+class LuaStack(gdb.Command):
+  def __init__(self):
+    super().__init__("lua-stack", gdb.COMMAND_DATA)
+
+  def invoke(self, arg, from_tty):
+    try:
+      start = _field("L->stack.p")
+      size = int(_field("L->stack_last.p - L->stack.p"))
+      top = _field("L->top.p")
+      gdb.write(f"Stack: start={start}, top={top}, size={size}\n")
+      nil_start = None
+
+      def write_nil_run(end):
+        nonlocal nil_start
+        if nil_start is None:
+          return
+        top_marker = ""
+        if start + nil_start <= top < start + end:
+          top_marker = f" <-- top at R[{int(top - start)}]"
+        count = end - nil_start
+        if count == 1:
+          gdb.write(f"  R[{nil_start:<2}] nil{top_marker}\n")
+        else:
+          gdb.write(
+            f"  R[{nil_start}..{end - 1}] nil ({count} slots){top_marker}\n"
+          )
+        nil_start = None
+
+      for index in range(size):
+        slot = (start + index).dereference()["val"]
+        text = _tvalue_text(slot)
+        if text == "nil":
+          if nil_start is None:
+            nil_start = index
+          continue
+        write_nil_run(index)
+        marker = " <-- top" if start + index == top else ""
+        gdb.write(f"  R[{index:<2}] {text}{marker}\n")
+      write_nil_run(size)
+    except gdb.error as exc:
+      gdb.write(f"lua-stack: no active Lua VM frame ({exc})\n")
+
+LuaStack()
+```
+
+在 push 前打断点，可以单步调试看到完整过程：
+
+```gdb
+break lua.c:785
+```
+
+输出
+
+```
+785	  lua_pushcfunction(L, &pmain);  /* to call 'pmain' in protected mode */
+(gdb) lua-stack
+Stack: start=0x5555555b1670, top=0x5555555b1680, size=40
+  R[0..39] nil (40 slots) <-- top at R[1]
+
+
+(gdb) n
+786	  lua_pushinteger(L, argc);  /* 1st argument */
+(gdb) lua-stack
+Stack: start=0x5555555b1670, top=0x5555555b1690, size=40
+  R[0 ] nil
+  R[1 ] CFunction(0x55555555cdaa <pmain>)
+  R[2..39] nil (38 slots) <-- top at R[2]
+
+
+(gdb) n
+787	  lua_pushlightuserdata(L, argv); /* 2nd argument */
+(gdb) lua-stack
+Stack: start=0x5555555b1670, top=0x5555555b16a0, size=40
+  R[0 ] nil
+  R[1 ] CFunction(0x55555555cdaa <pmain>)
+  R[2 ] 3
+  R[3..39] nil (37 slots) <-- top at R[3]
+
+
+(gdb) n
+788	  status = lua_pcall(L, 2, 1, 0);  /* do the call */
+(gdb) lua-stack
+Stack: start=0x5555555b1670, top=0x5555555b16b0, size=40
+  R[0 ] nil
+  R[1 ] CFunction(0x55555555cdaa <pmain>)
+  R[2 ] 3
+  R[3 ] lightuserdata(0x7fffffffe2e8)
+  R[4..39] nil (36 slots) <-- top at R[4]
+```
+
+接下来
+
+```c
+status = lua_pcall(L, 2, 1, 0);  /* do the call */
+```
+
+`2` 是参数数量，`1` 是返回值数量，`0` 是错误处理函数（这里传了 `0`，表示没有）。
+
+`lua_pcall` 会展开为 `lua_pcallk`，k 应该代表 continuation，有些 Lua 调用的 C 函数可以主动 yield, 实现异步。这里用不上，先不用管了。重点在于：
+
+```c
+int lua_pcallk (lua_State *L, int nargs, int nresults, int errfunc) {
+  struct CallS c;
+  ...
+  c.func = L->top.p - (nargs+1);  /* function to be called */
+  if (k == NULL || !yieldable(L)) {  /* no continuation or no yieldable? */
+    c.nresults = nresults;  /* do a 'conventional' protected call */
+    status = luaD_pcall(L, f_call, &c, savestack(L, c.func), func);
+  }
+  ...
+}
+```
+
+`c.func` 是栈顶往下数 `nargs + 1` 个位置，注意栈顶是第一个空闲位置，因此这就是我们之前 push 的 `pmain` C 函数指针。
