@@ -1,7 +1,6 @@
 # M4 crepl
 
-首先发现自己需要补一下编译链接的知识，于是找来 ICS 2025 年的视频回放看了一下：[09 链接与加载
- - bilibili](https://www.bilibili.com/video/BV11LysBsEnb)
+首先发现自己需要补一下编译链接的知识，于是找来 ICS 2025 年的视频回放看了一下：[09 链接与加载 - bilibili](https://www.bilibili.com/video/BV11LysBsEnb)
 
 大致来说，gcc 编译的过程是
 
