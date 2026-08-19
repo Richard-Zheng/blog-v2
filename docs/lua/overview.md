@@ -538,7 +538,7 @@ LUALIB_API void luaL_openselectedlibs (lua_State *L, int load, int preload) {
   luaL_getsubtable(L, LUA_REGISTRYINDEX, LUA_PRELOAD_TABLE);
   for (lib = stdlibs, mask = 1; lib->name != NULL; lib++, mask <<= 1) {
     if (load & mask) {  /* selected? */
-      luaL_requiref(L, lib->name, lib->func, 1);  /* require library */
+      luaL_requiref(L, lib->name, lib->func, 1 /* 1 表示添加到全局变量 */);  /* require library */
       lua_pop(L, 1);  /* remove result from the stack */
     }
     else if (preload & mask) {  /* selected? */
@@ -550,3 +550,8 @@ LUALIB_API void luaL_openselectedlibs (lua_State *L, int load, int preload) {
   lua_pop(L, 1);  /* remove PRELOAD table */
 }
 ```
+
+实际调用这些库函数时：
+
+- 编译期编译期解析名字时，按顺序查找：局部变量 → upvalue → 全局变量
+- 如果都没找到，例如：`math.sin(1)` 编译器不会识别 `math` 是不是标准库，而是直接把它转换为：`_ENV["math"]` 这样的访问。
