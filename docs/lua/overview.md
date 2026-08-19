@@ -81,6 +81,8 @@ LUA_API lua_State *lua_newstate (lua_Alloc f, void *ud, unsigned seed) {
   L->tt = LUA_VTHREAD;
 
   /* 设置一大堆字段的默认值... */
+  /* 值得注意的有这一行： */
+  incnny(L);  /* main thread is always non yieldable */
 
   if (luaD_rawrunprotected(L, f_luaopen, NULL) != LUA_OK) {
     /* memory allocation error: free partial state */
@@ -90,6 +92,35 @@ LUA_API lua_State *lua_newstate (lua_Alloc f, void *ud, unsigned seed) {
   return L;
 }
 ```
+
+`inccny` 在 `lstate.h` 中定义:
+
+```c
+/*
+** About 'nCcalls':  This count has two parts: the lower 16 bits counts
+** the number of recursive invocations in the C stack; the higher
+** 16 bits counts the number of non-yieldable calls in the stack.
+** (They are together so that we can change and save both with one
+** instruction.)
+*/
+
+/* true if this thread does not have non-yieldable calls in the stack */
+#define yieldable(L)		(((L)->nCcalls & 0xffff0000) == 0)
+
+/* real number of C calls */
+#define getCcalls(L)	((L)->nCcalls & 0xffff)
+
+/* Increment the number of non-yieldable calls */
+#define incnny(L)	((L)->nCcalls += 0x10000)
+
+/* Decrement the number of non-yieldable calls */
+#define decnny(L)	((L)->nCcalls -= 0x10000)
+
+/* Non-yieldable call increment */
+#define nyci	(0x10000 | 1)
+```
+
+它记录了 C stack 上有多少个 frame, 以及其中有多少个 frame 是 non-yieldable 的。注意：只要这些 frame 里有一个是 non-yieldable 的，那么整个 Lua thread 就是 non-yieldable 的。这里明确指定了主线程（第一个创建的 Lua “线程”）是 non-yieldable 的。
 
 `luaD_rawrunprotected` 保护调用了函数 `f_luaopen`，保护调用是什么呢？就是在出现错误的时候可以统一跳转到一段代码进行错误处理。类似于 try-catch.
 
@@ -402,7 +433,13 @@ status = lua_pcall(L, 2, 1, 0);  /* do the call */
 `lua_pcall` 会展开为 `lua_pcallk`，k 应该代表 continuation，有些 Lua 调用的 C 函数可以主动 yield, 实现异步。这里用不上，先不用管了。重点在于：
 
 ```c
-int lua_pcallk (lua_State *L, int nargs, int nresults, int errfunc) {
+static void f_call (lua_State *L, void *ud) {
+  struct CallS *c = cast(struct CallS *, ud);
+  luaD_callnoyield(L, c->func, c->nresults);
+}
+
+int lua_pcallk (lua_State *L, int nargs, int nresults, int errfunc,
+                lua_KContext ctx, lua_KFunction k /* 这两个参数本次调用都为 NULL */) {
   struct CallS c;
   ...
   c.func = L->top.p - (nargs+1);  /* function to be called */
@@ -415,3 +452,24 @@ int lua_pcallk (lua_State *L, int nargs, int nresults, int errfunc) {
 ```
 
 `c.func` 是栈顶往下数 `nargs + 1` 个位置，注意栈顶是第一个空闲位置，因此这就是我们之前 push 的 `pmain` C 函数指针。
+
+后面的过程有点复杂，而且深究的意义不大，直接看走到 `pmain` 的时候的调用栈吧：
+
+```
+Breakpoint 1, pmain (L=0x5555555b1598) at lua.c:731
+731	static int pmain (lua_State *L) {
+#0  pmain (L=0x5555555b1598) at lua.c:731
+#1  0x00005555555649aa in precallC (L=0x5555555b1598, func=0x5555555b1680, status=2, f=0x55555555cdaa <pmain>) at ldo.c:657
+#2  0x0000555555564d19 in luaD_precall (L=0x5555555b1598, func=0x5555555b1680, nresults=1) at ldo.c:726
+#3  0x0000555555564f90 in ccall (L=0x5555555b1598, func=0x5555555b1680, nResults=1, inc=65537) at ldo.c:766
+#4  0x0000555555565038 in luaD_callnoyield (L=0x5555555b1598, func=0x5555555b1680, nResults=1) at ldo.c:786
+#5  0x000055555555fdca in f_call (L=0x5555555b1598, ud=0x7fffffffe160) at lapi.c:1071
+#6  0x0000555555563862 in luaD_rawrunprotected (L=0x5555555b1598, f=0x55555555fd95 <f_call>, ud=0x7fffffffe160) at ldo.c:166
+#7  0x0000555555565918 in luaD_pcall (L=0x5555555b1598, func=0x55555555fd95 <f_call>, u=0x7fffffffe160, old_top=16, ef=0) at ldo.c:1090
+#8  0x000055555555fea2 in lua_pcallk (L=0x5555555b1598, nargs=2, nresults=1, errfunc=0, ctx=0, k=0x0) at lapi.c:1097
+#9  0x000055555555d0de in main (argc=3, argv=0x7fffffffe2e8) at lua.c:788
+```
+
+`luaD_pcall` 就是保存了当前 `lua_State` 的一些信息到 C 栈上，然后调用 `luaD_rawrunprotected` 并处理异常返回时的收尾工作。`f_call` 和 `luaD_callnoyield` 只是包装函数。
+
+后面的函数就是 C 侧调用 C / Lua 区别对待的逻辑：`ccall` 负责维护调用前后的 `L->nCcalls` 计数，如果执行的是 Lua 函数的话还会额外执行 `luaV_execute`，也就是 VM 的字节码解释器。`luaD_precall` 根据 `func` 的类型（C closure 或 Lua closure）来决定调用哪一条路径。C closure 会走到 `precallC`，准备好 CallInfo 后会直接进行真正的调用（precall 有点名不副实）。Lua closure 会走到 `prepCallInfo`，准备好 CallInfo 后会返回到 `ccall`。

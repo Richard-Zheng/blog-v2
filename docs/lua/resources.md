@@ -8,7 +8,7 @@
 
 [Interesting things about the Lua interpreter](https://thesephist.com/posts/lua/)
 
-[Lua 5.3 Reference Manual](https://www.lua.org/manual/5.3/manual.html) 尤其是第 4 章 [The Application Program Interface](https://www.lua.org/manual/5.3/manual.html#4)
+[Lua Reference Manual](https://www.lua.org/manual/) 尤其是第 4 章 [The Application Program Interface](https://www.lua.org/manual/5.3/manual.html#4) 中文翻译版：[Lua 5.3 参考手册](https://wiki-zh.luatos.org/luaGuide/luaReference.html)
 
 [A Look at the Design of Lua](https://cacm.acm.org/research/a-look-at-the-design-of-lua/)
 
