@@ -4,11 +4,13 @@
 >
 > [Source - Reddit](https://www.reddit.com/r/ProgrammingLanguages/comments/186ntu7/comment/kbiagvc/)
 
-[The Implementation of Lua 5.0](https://www.lua.org/doc/jucs05.pdf)
+[The Implementation of Lua 5.0 [PDF]](https://www.lua.org/doc/jucs05.pdf)
 
 [Interesting things about the Lua interpreter](https://thesephist.com/posts/lua/)
 
 [Lua Reference Manual](https://www.lua.org/manual/) 尤其是第 4 章 [The Application Program Interface](https://www.lua.org/manual/5.3/manual.html#4) 中文翻译版：[Lua 5.3 参考手册](https://wiki-zh.luatos.org/luaGuide/luaReference.html)
+
+[A No-Frills Introduction to Lua 5.1 VM Instructions [PDF]](https://mcours.net/cours/pdf/info1/Introduction_toLua_jkrfufd.pdf)
 
 [A Look at the Design of Lua](https://cacm.acm.org/research/a-look-at-the-design-of-lua/)
 
