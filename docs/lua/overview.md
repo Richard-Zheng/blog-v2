@@ -555,3 +555,247 @@ LUALIB_API void luaL_openselectedlibs (lua_State *L, int load, int preload) {
 
 - 编译期编译期解析名字时，按顺序查找：局部变量 → upvalue → 全局变量
 - 如果都没找到，例如：`math.sin(1)` 编译器不会识别 `math` 是不是标准库，而是直接把它转换为：`_ENV["math"]` 这样的访问。
+
+## 编译
+
+初始化 Lua 运行时环境后，`pmain` 会调用 `runargs` 来处理命令行参数。我们传入了 `-e "local a=10; local b=20; print(a+b)"`，因此会调用 `dostring` 来执行这段代码。
+
+Lua 的整个编译过程是 one-pass 的，词法分析、语法分析、字节码生成一遍完成。
+
+在把输入的 Lua 代码封装到一个 `ZIO` 输入字符串流后，调用 `luaY_parser` 编译。
+
+```c
+LClosure *luaY_parser (lua_State *L, ZIO *z, Table *anchor, Mbuffer *buff,
+                       Dyndata *dyd, const char *name, int firstchar) {
+  LexState lexstate;
+  FuncState funcstate;
+  LClosure *cl;
+  lexstate.h = anchor;  /* table for scanner */
+  cl = luaF_newLclosure(L, 1);  /* create main closure */
+  luaD_anchorobj(L, anchor, obj2gco(cl));  /* anchor it in scanner table */
+
+  /* 新建一个 Proto 对象，编译结果会放在这个对象里 */
+  funcstate.f = cl->p = luaF_newproto(L);
+
+  luaC_objbarrier(L, cl, cl->p);
+  funcstate.f->source = luaS_new(L, name);  /* create and anchor TString */
+  luaC_objbarrier(L, funcstate.f, funcstate.f->source);
+  lexstate.buff = buff;
+  lexstate.dyd = dyd;
+  dyd->actvar.n = dyd->gt.n = dyd->label.n = 0;
+
+  /* 给词法分析器绑定输入字符串流，设置源文件名，初始化行号，并预读第一个字符 */
+  luaX_setinput(L, &lexstate, z, funcstate.f->source, firstchar);
+
+  /* Parser 主函数 */
+  mainfunc(&lexstate, &funcstate);
+
+  lua_assert(!funcstate.prev && funcstate.nups == 1 && !lexstate.fs);
+  /* all scopes should be correctly finished */
+  lua_assert(dyd->actvar.n == 0 && dyd->gt.n == 0 && dyd->label.n == 0);
+  return cl;
+}
+```
+
+还是一堆初始化操作，重要的就上面注释的三行。
+
+`luaX_setinput` 用于初始化本次编译的 `LexState` 实例。逻辑：绑定输入流 `ZIO`、设置源文件名、初始化行号（默认为 1），并将第一个字符预读入 `ls->current`。
+
+`mainfunc` 代码：
+
+```c
+/*
+** compiles the main function, which is a regular vararg function with an
+** upvalue named LUA_ENV
+*/
+static void mainfunc (LexState *ls, FuncState *fs) {
+  BlockCnt bl;
+  Upvaldesc *env;
+  open_func(ls, fs, &bl);
+  setvararg(fs);  /* main function is always vararg */
+  env = allocupvalue(fs);  /* ...set environment upvalue */
+  env->instack = 1;
+  env->idx = 0;
+  env->kind = VDKREG;
+  env->name = ls->envn;
+  luaC_objbarrier(ls->L, fs->f, env->name);
+  luaX_next(ls);  /* read first token */
+  statlist(ls);  /* parse main body */
+  check(ls, TK_EOS);
+  close_func(ls);
+}
+```
+
+输入的代码（被称为 chunk）被视作一个 vararg 函数，函数的参数是命令行传给该 chunk 的参数（在 Lua 代码中可通过 `...` 访问），并且它默认包含一个名为 `_ENV` 的 Upvalue（指向全局环境），这也是 `mainfunc` 中 `allocupvalue` 所初始化的内容。
+
+随后会读取第一个 token 并开始语法解析。解析过程基本上符合 `LL(1)` 分析法。`statlist` (statment list) 显然就是 Lua 语法的 start symbol 了。先来看看读取第一个 token 调用的 `luaX_next`：
+
+```c
+void luaX_next (LexState *ls) {
+  ls->lastline = ls->linenumber;
+  if (ls->lookahead.token != TK_EOS) {  /* is there a look-ahead token? */
+    ls->t = ls->lookahead;  /* use this one */
+    ls->lookahead.token = TK_EOS;  /* and discharge it */
+  }
+  else
+    ls->t.token = llex(ls, &ls->t.seminfo);  /* read next token */
+}
+```
+
+这里可以看出来少部分情况下 parser 需要额外多看一个 lookahead token。
+
+`llex` 是词法分析器的核心函数，它会从输入流中读取字符，识别出一个完整的 token 并返回。
+
+```c
+/* 向前读取一个 char */
+#define next(ls)	(ls->current = zgetc(ls->z))
+
+static int check_next1 (LexState *ls, int c) {
+  if (ls->current == c) {
+    next(ls);
+    return 1;
+  }
+  else return 0;
+}
+
+static int llex (LexState *ls, SemInfo *seminfo) {
+  luaZ_resetbuffer(ls->buff);
+  for (;;) {
+    switch (ls->current) {
+      case '\n': case '\r': {  /* line breaks */
+        inclinenumber(ls);
+        break;
+      }
+      case ' ': case '\f': case '\t': case '\v': {  /* spaces */
+        next(ls);
+        break;
+      }
+      /* 省略注释、多行注释、多行字符串 */
+      case '=': {
+        next(ls);
+        if (check_next1(ls, '=')) return TK_EQ;  /* '==' */
+        else return '=';
+      }
+      /* 省略其他运算符 */
+      case '"': case '\'': {  /* short literal strings */
+        read_string(ls, ls->current, seminfo);
+        return TK_STRING;
+      }
+      case '.': {  /* '.', '..', '...', or number */
+        save_and_next(ls);
+        if (check_next1(ls, '.')) {
+          if (check_next1(ls, '.'))
+            return TK_DOTS;   /* 三个点 "..." (Vararg 可变参数) */
+          else return TK_CONCAT;   /* 两个点 ".."  (字符串连接符) */
+        }
+        else if (!lisdigit(ls->current)) return '.'; /* 仅单个 '.' (成员访问) */
+        /* 如果 '.' 后面紧跟数字（例如 .5），视为浮点数值字面量 */
+        else return read_numeral(ls, seminfo);
+      }
+      case '0': case '1': case '2': case '3': case '4':
+      case '5': case '6': case '7': case '8': case '9': {
+        return read_numeral(ls, seminfo);
+      }
+      case EOZ: { /* end of file */
+        return TK_EOS; /* End of Stream 结束符 */
+      }
+      default: {
+        /* 标识符、保留字、单字符运算符 */
+        if (lislalpha(ls->current)) {  /* 读到的是字母, 说明是标识符或保留字 */
+          TString *ts;
+          do {
+            /* 循环读取合法的标识符字符（字母、数字、下划线） */
+            /* 读取时会把字符存入缓冲区 ls->buff 中 */
+            save_and_next(ls);
+          } while (lislalnum(ls->current));
+          /* find or create string */
+          ts = luaS_newlstr(ls->L, luaZ_buffer(ls->buff),
+                                   luaZ_bufflen(ls->buff));
+          if (isreserved(ts))
+            return ts->extra - 1 + FIRST_RESERVED; /* 保留字 */
+          else {
+            /* 暂存在 seminfo 里 */
+            seminfo->ts = anchorstr(ls, ts);
+            return TK_NAME;
+          }
+        }
+        else {  /* single-char tokens ('+', '*', '%', '{', '}', ...) */
+          int c = ls->current;
+          next(ls);
+          return c;
+        }
+      }
+    }
+  }
+}
+```
+
+看完了 lexer 回到 parser 上，`statlist` 的代码：
+
+```c
+/*
+** check whether current token is in the follow set of a block.
+** 'until' closes syntactical blocks, but do not close scope,
+** so it is handled in separate.
+*/
+static int block_follow (LexState *ls, int withuntil) {
+  switch (ls->t.token) {
+    case TK_ELSE: case TK_ELSEIF:
+    case TK_END: case TK_EOS:
+      return 1;
+    case TK_UNTIL: return withuntil;
+    default: return 0;
+  }
+}
+
+static void statlist (LexState *ls) {
+  /* statlist -> { stat [';'] } */
+  while (!block_follow(ls, 1)) {
+    if (ls->t.token == TK_RETURN) {
+      statement(ls);
+      return;  /* 'return' must be last statement */
+    }
+    statement(ls);
+  }
+}
+```
+
+就是一直读取 statement, 下一个 token 在 FOLLOW(Block) 集合中的话，不消费 token 就返回；如果读到的 statement 是 `return`, 就消费后返回。
+
+现在来看 `statement`，重点看表达式和函数调用的解析：
+
+```c
+static void statement (LexState *ls) {
+  int line = ls->linenumber;  /* may be needed for error messages */
+  enterlevel(ls);
+  switch (ls->t.token) {
+    case ';': {  /* stat -> ';' (empty statement) */
+      luaX_next(ls);  /* skip ';' */
+      break;
+    }
+    case TK_IF: {  /* stat -> ifstat */
+      ifstat(ls, line);
+      break;
+    }
+    /* 省略其他语句类型 */
+
+    case TK_LOCAL: {  /* stat -> localstat */
+      luaX_next(ls);  /* skip LOCAL */
+      if (testnext(ls, TK_FUNCTION))  /* local function? */
+        localfunc(ls);
+      else
+        localstat(ls);
+      break;
+    }
+    /* FALLTHROUGH */
+    default: {  /* stat -> func | assignment */
+      exprstat(ls);
+      break;
+    }
+  }
+  lua_assert(ls->fs->f->maxstacksize >= ls->fs->freereg &&
+             ls->fs->freereg >= luaY_nvarstack(ls->fs));
+  ls->fs->freere` = luaY_nvarstack(ls->fs);  /* free registers */
+  leavelevel(ls);
+}
+```
