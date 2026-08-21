@@ -146,3 +146,40 @@ static int lvm_pmain(lua_State *L)
 	return 1;
 }
 ```
+
+重点在于后面那段，`_MODULES` 的 `metatable.__index` 被设为 `lua_modules_index`，也就是当访问 `_MODULES` 表中不存在的 key 时，会调用 `lua_modules_index`。
+
+```c
+static int lua_modules_index(lua_State *L)
+{
+	const char *key = luaL_checkstring(L, 2);
+	struct lua_lsm_module *module;
+	int err;
+
+	/* module queries are always run with a read lock */
+	list_for_each_entry_srcu(module, &lsm_modules, list,
+				 srcu_read_lock_held(&modules_ss)) {
+		if (strcmp(module->name, key) != 0)
+			continue;
+
+		lvm_mark_dirty(L);
+		err = module_load(L, module); /* 重点：加载 key 匹配的模块 */
+		if (err) {
+			__log_err("load: %s, err = %d, top = %d\n",
+				  key, err, lua_gettop(L));
+			return 0;
+		}
+
+		lua_insert(L, -2);
+		lua_pushvalue(L, -2);
+		/* stack: [table, thunk, key, thunk] */
+		lua_rawset(L, 1);		/* table[key] = thunk */
+
+		atomic_inc(&module->nloaded);
+		return 1;			/* return the thunk */
+	}
+
+	__log_err("'%s' NOT found, top = %d\n", key, lua_gettop(L));
+	return 0;
+}
+```
