@@ -560,7 +560,15 @@ LUALIB_API void luaL_openselectedlibs (lua_State *L, int load, int preload) {
 
 初始化 Lua 运行时环境后，`pmain` 会调用 `runargs` 来处理命令行参数。我们传入了 `-e "local a=10; local b=20; print(a+b)"`，因此会调用 `dostring` 来执行这段代码。
 
-Lua 的整个编译过程是 one-pass 的，词法分析、语法分析、字节码生成一遍完成。
+```c
+static int dostring (lua_State *L, const char *s, const char *name) {
+  return dochunk(L, luaL_loadbufferx(L, s, strlen(s), name, "t"));
+}
+```
+
+`luaL_loadbufferx` 从这个函数开始进入编译过程。返回后会把编译成功标志和 L 一起送给 `dochunk` 函数，进入 Lua 字节码 VM.
+
+Lua 的整个编译过程是 single-pass 的，没有 AST. 词法分析、语法分析、字节码生成一遍完成。
 
 在把输入的 Lua 代码封装到一个 `ZIO` 输入字符串流后，调用 `luaY_parser` 编译。
 
@@ -642,7 +650,7 @@ void luaX_next (LexState *ls) {
 }
 ```
 
-这里可以看出来少部分情况下 parser 需要额外多看一个 lookahead token。
+只是 `llex` 的一个包装函数，处理了一下有额外多 lookahead 一个 token 的情况。这里可以看出来少部分情况下 parser 需要额外多看一个 lookahead token。
 
 `llex` 是词法分析器的核心函数，它会从输入流中读取字符，识别出一个完整的 token 并返回。
 
@@ -799,3 +807,7 @@ static void statement (LexState *ls) {
   leavelevel(ls);
 }
 ```
+
+`localstat` 处理 `local a = 10` 这样的语句。看了一下感觉乱七八糟的细节有点多……先跳过了。
+
+
