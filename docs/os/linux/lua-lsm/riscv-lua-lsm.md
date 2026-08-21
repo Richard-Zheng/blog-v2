@@ -120,6 +120,36 @@ mkdir -p /tmp/lua-lsm-tools
 ln -sf /usr/bin/sed /tmp/lua-lsm-tools/gsed
 ```
 
+另外如果编译的是 x86 架构，需要改一下：
+
+```diff
+diff --git a/arch/x86/tools/relocs.c b/arch/x86/tools/relocs.c
+index e5a2b9a91..d93107697 100644
+--- a/arch/x86/tools/relocs.c
++++ b/arch/x86/tools/relocs.c
+@@ -287,16 +287,16 @@ static const char *sym_name(const char *sym_strtab, Elf_Sym *sym)
+        return name;
+ }
+
+-#if BYTE_ORDER == LITTLE_ENDIAN
++#if __BYTE_ORDER == __LITTLE_ENDIAN
+ # define le16_to_cpu(val)      (val)
+ # define le32_to_cpu(val)      (val)
+ # define le64_to_cpu(val)      (val)
+-#endif
+-
+-#if BYTE_ORDER == BIG_ENDIAN
++#elif __BYTE_ORDER == __BIG_ENDIAN
+ # define le16_to_cpu(val)      bswap_16(val)
+ # define le32_to_cpu(val)      bswap_32(val)
+ # define le64_to_cpu(val)      bswap_64(val)
++#else
++# error "Unknown byte order"
+ #endif
+
+ static uint16_t elf16_to_cpu(uint16_t val)
+```
+
 编译：
 
 ```bash
