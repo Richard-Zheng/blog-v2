@@ -157,6 +157,12 @@ tailscale up
 
 This will output a URL. Copy and paste that URL into your web browser to authenticate the router to your Tailnet.
 
+Because OpenWrt's firewall rule already does masquerade i.e. NAT, disable from Tailscale side:
+
+```
+tailscale set --snat-subnet-routes=false
+```
+
 ### DNS
 
 Tailscale by default will change `/etc/resolv.conf` to:
@@ -172,9 +178,9 @@ nameserver fd7a:115c:a1e0::53
 search tail.example.com lan
 ```
 
-If you want to prevent that, refer to [this blog post](https://leezh.net/articles/2025-08-16-setting-up-tailscale-with-magic-dns-on-an-openwrt-router/).
+[source](https://leezh.net/articles/2025-08-16-setting-up-tailscale-with-magic-dns-on-an-openwrt-router/).
 
-Disable Tailscale auto-set DNS:
+To prevent Tailscale from messing with `resolv.conf`, disable accept DNS:
 
 ```
 tailscale set --accept-dns=false
