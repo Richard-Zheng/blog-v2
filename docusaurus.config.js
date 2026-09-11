@@ -5,6 +5,8 @@
 // See: https://docusaurus.io/docs/api/docusaurus-config
 
 import {themes as prismThemes} from 'prism-react-renderer';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
 
 // This runs in Node.js - Don't use client-side code here (browser APIs, JSX...)
 
@@ -47,6 +49,8 @@ const config = {
       ({
         docs: {
           sidebarPath: './sidebars.js',
+          remarkPlugins: [remarkMath],
+          rehypePlugins: [rehypeKatex],
           // Please change this to your repo.
           // Remove this to remove the "edit this page" links.
           editUrl:
@@ -54,6 +58,9 @@ const config = {
         },
         blog: {
           showReadingTime: true,
+          blogSidebarCount: 'ALL',
+          remarkPlugins: [remarkMath],
+          rehypePlugins: [rehypeKatex],
           feedOptions: {
             type: ['rss', 'atom'],
             xslt: true,
@@ -72,6 +79,16 @@ const config = {
         },
       }),
     ],
+  ],
+
+  stylesheets: [
+    {
+      href: 'https://cdn.jsdelivr.net/npm/katex@0.13.24/dist/katex.min.css',
+      type: 'text/css',
+      integrity:
+        'sha384-odtC+0UGzzFL/6PNoE8rX/SPcQDXBJ+uRepguP4QkPCm2LBxH3FA3y+fKSiJ+AmM',
+      crossorigin: 'anonymous',
+    },
   ],
 
   themeConfig:
@@ -93,7 +110,7 @@ const config = {
           },
           {to: '/blog', label: 'Blog', position: 'left'},
           {
-            href: 'https://github.com/facebook/docusaurus',
+            href: 'https://github.com/Richard-Zheng',
             label: 'GitHub',
             position: 'right',
           },
@@ -109,23 +126,32 @@ const config = {
                 label: 'Tutorial',
                 to: '/docs/intro',
               },
+              {
+                label: 'Blog',
+                to: '/blog',
+              },
             ],
           },
           {
             title: 'More',
             items: [
               {
-                label: 'Blog',
-                to: '/blog',
+                label: '文章归档',
+                to: '/blog/archive',
               },
               {
                 label: 'GitHub',
-                href: 'https://github.com/facebook/docusaurus',
+                href: 'https://github.com/Richard-Zheng',
               },
             ],
           },
         ],
-        copyright: `Copyright © ${new Date().getFullYear()}. Built with Docusaurus.`,
+        copyright: `Copyright © ${new Date().getFullYear()} fallrain.`,
+      },
+      blog: {
+        sidebar: {
+          groupByYear: true,
+        },
       },
       prism: {
         theme: prismThemes.github,
