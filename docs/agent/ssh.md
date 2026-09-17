@@ -18,7 +18,7 @@ Output:
 zsh:1: unmatched '
 ```
 
-And it tried once more, this time get it right. But I don't want to waste tokens on this.
+And it tried once more, and got it right. But I don't want to waste tokens on this.
 
 So I wrote a `ssh` wrapper to `~/.local/bin/ssh-run`
 
