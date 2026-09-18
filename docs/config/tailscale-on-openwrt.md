@@ -61,7 +61,14 @@ START=80
 
 start_service() {
     procd_open_instance
+
+    # Memory limit
+    procd_set_param env GOGC=50
+    procd_set_param env GOMEMLIMIT=90MiB
+
+    # Change to iptables if on OpenWrt 21 or lower
     procd_set_param env TS_DEBUG_FIREWALL_MODE=nftables
+
     procd_set_param command /usr/sbin/tailscaled
     procd_append_param command --state=/etc/tailscale/tailscaled.state
     procd_append_param command --port=41641
