@@ -62,7 +62,45 @@ uci commit network
 
 `dhcpv6.script` 据此决定调用 `proto_add_ipv6_route` 时是否传源地址参数。
 
-## 3. 让 LAN 的 RA 通告默认网关
+## 3. 配置 LAN 的 IPv6 服务
+
+LAN 需要作为 RA 服务器和 DHCPv6 服务器，把 ULA 前缀和默认网关通告给客户端。DNS 走 IPv4
+的 dnsmasq 就够了，不需要本机作为 IPv6 DNS 服务器，也不需要 NDP 代理：
+
+```
+uci set dhcp.lan.ra='server'
+uci set dhcp.lan.dhcpv6='server'
+uci set dhcp.lan.dns_service='0'
+uci set dhcp.lan.ndp='disabled'
+uci set dhcp.lan.ra_slaac='1'
+uci set dhcp.lan.ra_flags='managed-config'
+uci commit dhcp
+/etc/init.d/odhcpd restart
+```
+
+各选项的含义（来自 `odhcpd` 的 README）：
+
+| 选项 | 值 | 含义 |
+|---|---|---|
+| `ra` | `server` | 作为 RA 服务器 |
+| `dhcpv6` | `server` | 作为 DHCPv6 服务器 |
+| `dns_service` | `0` | 不把本机地址作为 DNS 服务通告 |
+| `ndp` | `disabled` | 关闭 NDP 代理 |
+| `ra_slaac` | `1` | PIO 里置 A (autonomous) 标志，启用 SLAAC |
+| `ra_flags` | `managed-config` | RA 置 M (managed) 标志，告诉客户端用 DHCPv6 拿地址 |
+
+**注意**：`ra_management` 和 `ra_flags` / `ra_slaac` 是互斥的，见 `config.c`：
+
+```c
+if (!tb[IFACE_ATTR_RA_FLAGS] && !tb[IFACE_ATTR_RA_SLAAC] &&
+    (c = tb[IFACE_ATTR_RA_MANAGEMENT])) {
+```
+
+只要显式设了 `ra_flags` 或 `ra_slaac`，`ra_management` 就会被整个忽略。LuCI 界面写的是
+`ra_management`，手动配置时容易和 `ra_flags` 混用，两者不要同时设。`ra_management` 的映射
+关系是 `0`: OTHER + SLAAC，`1`: OTHER|MANAGED + SLAAC，`2`: OTHER|MANAGED 无 SLAAC。
+
+## 4. 让 LAN 的 RA 通告默认网关
 
 LAN 只有 ULA 时，`odhcpd` 默认不会把路由器自己通告为默认网关，RA 里 router lifetime 是 0：
 
@@ -112,7 +150,7 @@ uci commit dhcp
 tcpdump -i br-lan -n -vvv 'icmp6 and ip6[40] == 134'
 ```
 
-## 4. 添加 NAT66 规则
+## 5. 添加 NAT66 规则
 
 `fw3` 不认识 `masq6`：
 
@@ -148,7 +186,7 @@ EOF
 
 把 `eth1` 换成实际的 WAN 设备名。
 
-## 5. 让 firewall.user 在 reload 时也执行
+## 6. 让 firewall.user 在 reload 时也执行
 
 `fw3` 的 `reload` 和 `restart` 对 include 的处理不同，见 `includes.c`：
 
@@ -175,7 +213,7 @@ uci set firewall.@include[0].reload='1'
 uci commit firewall
 ```
 
-## 6. 应用并验证
+## 7. 应用并验证
 
 ```
 ifdown wan6; ifup wan6
@@ -205,13 +243,18 @@ cat /proc/net/nf_conntrack | grep ipv6
 # src=<公网>    dst=2001:db8::1234   <- 回包被 masquerade 回 WAN 的 /128
 ```
 
-## 7. 持久化
+## 8. 持久化
 
 改动都已通过 `uci commit` 写入 `/etc/config/`，重启后自动生效：
 
 | 配置 | 作用 |
 |---|---|
 | `network.wan6.sourcefilter='0'` | 去掉默认路由的源地址限制 |
+| `dhcp.lan.ra='server'` / `dhcpv6='server'` | LAN 作为 RA / DHCPv6 服务器 |
+| `dhcp.lan.dns_service='0'` | 不把本机地址作为 DNS 服务通告 |
+| `dhcp.lan.ndp='disabled'` | 关闭 NDP 代理 |
+| `dhcp.lan.ra_slaac='1'` | 启用 SLAAC |
+| `dhcp.lan.ra_flags='managed-config'` | RA 置 M 标志 |
 | `dhcp.lan.ra_default='2'` | RA 通告默认网关 |
 | `firewall.@include[0].reload='1'` | `fw3 reload` 时执行 `firewall.user` |
 | `/etc/firewall.user` 里的 `ip6tables ... MASQUERADE` | NAT66 规则本身 |
@@ -220,7 +263,25 @@ cat /proc/net/nf_conntrack | grep ipv6
 
 ## 附：关于 fullcone
 
-IPv6 **没有** fullcone。`xt_FULLCONENAT` 的 target 注册写死了 IPv4：
+IPv4 fullcone 由两个 opkg 包提供：`kmod-ipt-fullconenat`（内核模块 `xt_FULLCONENAT.ko`）
+和 `iptables-mod-fullconenat`（用户态 `libipt_FULLCONENAT.so`），代码来自
+[Chion82/netfilter-full-cone-nat](https://github.com/Chion82/netfilter-full-cone-nat)。
+
+上游 `fw3` 不认识 `fullcone` 选项，需要 `package/network/config/firewall` 里的
+`100-fullconenat.patch` 支持。开了之后（LuCI 里是 `luci-app-turboacc` 的开关）会把
+`MASQUERADE` target 换成 `FULLCONENAT`：
+
+```
+uci set firewall.@defaults[0].fullcone='1'
+uci commit firewall
+fw3 reload
+
+# iptables -t nat -S
+# -A zone_wan_postrouting -j FULLCONENAT
+# -A zone_wan_prerouting  -j FULLCONENAT
+```
+
+**IPv6 没有 fullcone**。同一个模块的 target 注册写死了 IPv4：
 
 ```c
 static struct xt_target tg_reg[] __read_mostly = {
@@ -231,17 +292,16 @@ static struct xt_target tg_reg[] __read_mostly = {
   ...
 ```
 
-映射表里存的是 `__be32`（32 位 IPv4 地址）。要支持 v6 得把数据结构改成 `nf_inet_addr` 并
-新增 `NFPROTO_IPV6` 的注册项。用户态也只有 `libipt_FULLCONENAT.so`，没有
-`libip6t_FULLCONENAT.so`，`ip6tables -j FULLCONENAT` 会报 `Couldn't load target`。
+映射表存的是 `__be32`（32 位地址），用户态也没有 `libip6t_FULLCONENAT.so`，
+`ip6tables -j FULLCONENAT` 会报 `Couldn't load target`。
 
-所以这里配出来的是**对称 NAT**，不是 fullcone。内网主动出网够用；外部主动访问内网设备需要
+所以本文档配出来的是**对称 NAT**，不是 fullcone。内网主动出网够用；外部主动访问内网设备需要
 额外加 DNAT 规则。
 
 ## 附：DNS
 
-不需要为了 IPv6 专门给 LAN 下发 IPv6 DNS。DNS 查询走的传输层（UDP/TCP）和它查询的记录类型
-（A / AAAA）是独立的两件事，用 IPv4 的 DNS 服务器照样能拿到 AAAA 记录：
+不需要为了 IPv6 专门给 LAN 下发 IPv6 DNS。DNS 查询走的传输层（UDP/TCP）和它查询的记录
+类型（A / AAAA）是独立的两件事，用 IPv4 的 DNS 服务器照样能拿到 AAAA 记录：
 
 ```
 nslookup www.baidu.com 192.168.1.1
@@ -252,4 +312,8 @@ Address 1: 183.2.172.177
 Address 2: 240e:ff:e020:99b:0:ff:b099:cff1   <- AAAA 正常返回
 ```
 
-`dhcp.lan.dns_service` 保持默认即可。
+所以第 3 步里把 `dns_service` 设为 `0`（不把本机地址作为 IPv6 DNS 服务通告），客户端继续
+用 DHCPv4 下发的 `192.168.1.1` 就行。
+
+`dns_service` 的默认值其实是 `1`（见 `odhcpd` 的 `config.c`：`iface->dns_service = true;`），
+即默认会把本机地址作为 DNS 服务通过 DHCPv6 / RA 下发。设成 `0` 只是去掉这个多余的通告。
