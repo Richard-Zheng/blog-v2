@@ -179,12 +179,85 @@ case FW3_TABLE_NAT:
 cat >> /etc/firewall.user <<'EOF'
 
 # IPv6 NAT66
+while ip6tables -t nat -D POSTROUTING -o eth1 -m addrtype --src-type LOCAL -j RETURN 2>/dev/null; do :; done
 while ip6tables -t nat -D POSTROUTING -o eth1 -j MASQUERADE 2>/dev/null; do :; done
+ip6tables -t nat -A POSTROUTING -o eth1 -m addrtype --src-type LOCAL -j RETURN
 ip6tables -t nat -A POSTROUTING -o eth1 -j MASQUERADE
 EOF
 ```
 
 把 `eth1` 换成实际的 WAN 设备名。
+
+### 为什么必须先 RETURN 本机流量
+
+**只写 `-o eth1 -j MASQUERADE` 是不够的。** `POSTROUTING` 链同时处理两类流量：
+
+- 从 LAN 转发出去、需要 NAT66 的流量
+- **路由器自身从 eth1 出去的流量**
+
+`MASQUERADE` 只匹配 `-o eth1`，不区分这两者，于是路由器自己的 UDP 源端口会被改写。
+最典型的就是 tailscale：
+
+```
+# tailscaled 监听固定端口 41641
+ss -lnup | grep tailscaled
+# udp  0  0  :::41641  :::*  tailscaled
+
+# 但 netcheck 报的 IPv6 端口每次都不同
+tailscale netcheck
+#   * IPv6: yes, [2001:da8:...:43e1]:33492
+#   * IPv6: yes, [2001:da8:...:43e1]:50371   <- 下一次又变了
+```
+
+netcheck 本身每次开临时 socket，端口随机是正常的；但 conntrack 里能看到主 socket
+也被改写了：
+
+```
+cat /proc/net/nf_conntrack | grep 41641
+# src=2001:da8:...:43e1 sport=41641 ...
+# src=...:cafe sport=49164 dport=36075      <- 回包目标端口不是 41641
+```
+
+这会让外部无法靠固定端口主动连入，破坏 IPv6 直连。
+
+### 用 `addrtype LOCAL` 而不是 `-s <ULA 前缀>`
+
+有两种写法能排除本机流量，推荐后者：
+
+```
+# 写法 A: 限定源为 LAN 的 ULA 前缀
+ip6tables -t nat -A POSTROUTING -o eth1 -s fd16:811a:a19c::/60 -j MASQUERADE
+
+# 写法 B: 先把本机地址 RETURN 掉, 再无条件 NAT (推荐)
+ip6tables -t nat -A POSTROUTING -o eth1 -m addrtype --src-type LOCAL -j RETURN
+ip6tables -t nat -A POSTROUTING -o eth1 -j MASQUERADE
+```
+
+写法 B 更好，因为它**不依赖 ULA 具体前缀**：
+
+- 换 ULA 前缀（重建 LAN、改 `ip6assign`）不用改规则
+- 有多个 ULA 段也不用逐条列
+- `addrtype --src-type LOCAL` 是内核根据本机地址自动判定的，覆盖所有本机地址
+  （WAN `/128`、LAN ULA、tailscale 的 `fd7a:115c:a1e0::/48` 等）
+
+验证：
+
+```
+# 清空计数, 只跑本机出站流量, 再查命中
+ip6tables -t nat -Z POSTROUTING
+ping6 -c3 2400:3200::1
+ip6tables -t nat -L POSTROUTING -n -v | grep -E 'RETURN|MASQUERADE'
+#  1  ...  RETURN      ...  ADDRTYPE match src-type LOCAL   <- 本机命中 RETURN
+#  0  ...  MASQUERADE  ...                                   <- 没被 NAT, 才对
+
+# 再看 LAN 客户端的会话 (应有回包到 WAN /128 的 NAT 记录)
+cat /proc/net/nf_conntrack | grep 'src=fd16'
+# src=fd16:...:0b7e dst=2400:3200::1
+# src=2400:3200::1 dst=2001:da8:...:43e1   <- NAT 生效
+```
+
+> 注意：验证时**不能**用 `ping6 -I <路由器自己的 ULA 地址>`。那个地址属于 LOCAL，
+> 会被 RETURN 规则跳过，测不出转发路径。要从真正的 LAN 客户端发流量。
 
 ## 6. 让 firewall.user 在 reload 时也执行
 
@@ -222,7 +295,9 @@ fw3 reload
 
 ```
 ip6tables -t nat -S POSTROUTING
-# 应该有 -A POSTROUTING -o eth1 -j MASQUERADE
+# 应该有 RETURN + MASQUERADE 两条
+# -A POSTROUTING -o eth1 -m addrtype --src-type LOCAL -j RETURN
+# -A POSTROUTING -o eth1 -j MASQUERADE
 
 ip -6 route show default
 # 应该没有 "from ..." 前缀
@@ -257,7 +332,7 @@ cat /proc/net/nf_conntrack | grep ipv6
 | `dhcp.lan.ra_flags='managed-config'` | RA 置 M 标志 |
 | `dhcp.lan.ra_default='2'` | RA 通告默认网关 |
 | `firewall.@include[0].reload='1'` | `fw3 reload` 时执行 `firewall.user` |
-| `/etc/firewall.user` 里的 `ip6tables ... MASQUERADE` | NAT66 规则本身 |
+| `/etc/firewall.user` 里的 `ip6tables ... MASQUERADE` | NAT66 规则本身（必须带 addrtype LOCAL RETURN，见第 5 节）|
 
 `/etc/firewall.user` 是持久化文件，不在 tmpfs 上。每次 `fw3` 启动 / reload 都会重新执行。
 
