@@ -81,6 +81,13 @@ const config = {
     ],
   ],
 
+  // Enables ```mermaid code blocks in Markdown/MDX.
+  markdown: {
+    mermaid: true,
+  },
+
+  themes: ['@docusaurus/theme-mermaid'],
+
   stylesheets: [
     {
       href: 'https://cdn.jsdelivr.net/npm/katex@0.13.24/dist/katex.min.css',
