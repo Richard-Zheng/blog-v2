@@ -11,6 +11,8 @@ tags: ['AI']
 
 ## 证明
 
+### 引理的引理
+
 **单位模引理**：随机取向量 $\boldsymbol{u}\in\mathbb{R}^{n}$ 每个分量独立重复采样自 $\mathcal{N}(0,1/n)$，那么它的模长 $\|\boldsymbol{u}\|$ **大概率**接近 1。有多大概率呢？设 $\varepsilon \in (0,1)$ 为 $\|\boldsymbol{u}\|$ 偏移 1 的距离，则有
 
 $$
@@ -19,6 +21,8 @@ $$
 
 随着 $n$ 的增大，保距 $\varepsilon$ 失败的概率指数级下降，趋近于 0.
 
+---
+
 **正交性引理**：设 $\boldsymbol{u},\boldsymbol{v}\in\mathbb{R}^n$ 是独立重复采样自 $\mathcal{N}(0,1/n)$ 的两个向量， $\varepsilon\in(0,1)$ 是给定常数，那么我们有
 
 $$
@@ -26,6 +30,8 @@ P(|\langle \boldsymbol{u}, \boldsymbol{v}\rangle| \geq \varepsilon) \leq 4\exp\l
 $$
 
 也就是两个向量的点积**大概率**很接近 0。同样，随着 $n$ 的增大，点积超过 $\varepsilon$ 的概率指数级下降。
+
+### 数学版 JL 引理
 
 现在证明 Johnson-Lindenstrauss 引理：
 
@@ -37,7 +43,7 @@ $$
 
 证明：
 
-令单位向量 $\boldsymbol{u}=\frac{\boldsymbol{v}_i - \boldsymbol{v}_j}{\Vert \boldsymbol{v}_i - \boldsymbol{v}_j\Vert}$. 对于单位向量 $\boldsymbol{u}$，$A\boldsymbol{u}$ 的每个分量也是独立重复采样自 $\mathcal{N}(0,1/n)$ 的。（比较显然好理解就不证明了）利用“单位模引理”得到
+令单位向量 $\boldsymbol{u}=\frac{\boldsymbol{v}_i - \boldsymbol{v}_j}{\Vert \boldsymbol{v}_i - \boldsymbol{v}_j\Vert}$. 对于单位向量 $\boldsymbol{u}$，$A\boldsymbol{u}$ 的每个分量也独立重复采样自 $\mathcal{N}(0,1/n)$ （比较显然好理解就不证明了）。利用“单位模引理”得到
 
 $$
 P\left(\left|\left\Vert \frac{A(\boldsymbol{v}_i - \boldsymbol{v}_j)}{\Vert \boldsymbol{v}_i - \boldsymbol{v}_j\Vert}\right\Vert^2 - 1\right| \geq \varepsilon\right) \leq 2\exp\left(-\frac{\varepsilon^2 n}{8}\right)
@@ -73,7 +79,9 @@ $$
 (1-\varepsilon)\Vert \boldsymbol{v}_i - \boldsymbol{v}_j\Vert^2 \leq \Vert A\boldsymbol{v}_i - A \boldsymbol{v}_j\Vert^2 \leq (1+\varepsilon)\Vert \boldsymbol{v}_i - \boldsymbol{v}_j\Vert^2
 $$
 
-内积版 JL 引理：给定 $N$ 个单位向量 $\boldsymbol{v}_1,\boldsymbol{v}_2,⋯,\boldsymbol{v}_N \in \mathbb{R}^m$ 和 $n > \frac{24\log N}{\varepsilon^2}$ ，而随机矩阵 $A\in\mathbb{R}^{n\times m}$ 独立重复采样自 $\mathcal{N}(0,1/n)$ ，$\varepsilon\in(0,1)$ 是给定常数，那么至少有 $N-1/N$ 的概率，使得对于所有的 $i \neq j$ ，都成立
+### 内积版 JL 引理
+
+**内积版 JL 引理**：给定 $N$ 个单位向量 $\boldsymbol{v}_1,\boldsymbol{v}_2,⋯,\boldsymbol{v}_N \in \mathbb{R}^m$ 和 $n > \frac{24\log N}{\varepsilon^2}$ ，而随机矩阵 $A\in\mathbb{R}^{n\times m}$ 独立重复采样自 $\mathcal{N}(0,1/n)$ ，$\varepsilon\in(0,1)$ 是给定常数，那么至少有 $N-1/N$ 的概率，使得对于所有的 $i \neq j$ ，都成立
 
 $$
 |\langle A\boldsymbol{v}_i, A\boldsymbol{v}_j\rangle - \langle \boldsymbol{v}_i, \boldsymbol{v}_j\rangle| \leq \varepsilon
@@ -140,3 +148,11 @@ $$
 $$
 \left\vert{}\langle Av_i, Av_j \rangle - \langle v_i, v_j \rangle\right\vert{} \le \varepsilon
 $$
+
+## 应用
+
+对我而言最直接想到的应用是 Attention 的可解释性。不过想了一下好像还是差点意思。
+
+Attention 分数的计算就是 $\boldsymbol{q}^{\top}\boldsymbol{k}$，参考上面的内积版 JL 引理，可以证明 $\boldsymbol{q}, \boldsymbol{k}$ 就算 dimension 比较小，只需要在 $O(\log N)$ 这个量级（$N$ 是 token 数量）就可以近似保留高维 $\boldsymbol{q}^{\top}\boldsymbol{k}$ 的内积。
+
+按照苏剑林的博客，这就是为什么少有人去 scale $\boldsymbol{q}, \boldsymbol{k}$ 的维度，模型的参数量增长了很多，但是 $\boldsymbol{q}, \boldsymbol{k}$ 的维度还是保持在 64 或者 128 这个量级。

@@ -1,0 +1,8 @@
+{
+  "label": "Agent",
+  "position": 10,
+  "link": {
+    "type": "generated-index",
+    "description": "AI Agent 使用笔记"
+  }
+}
