@@ -1,0 +1,55 @@
+.controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ifm-spacing-horizontal);
+}
+
+.slider {
+  display: block;
+  width: 100%;
+  margin: var(--ifm-spacing-vertical) 0 0;
+  accent-color: var(--ifm-color-primary);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: var(--ifm-spacing-vertical) var(--ifm-spacing-horizontal);
+}
+
+.clock {
+  display: block;
+  width: 100%;
+  max-width: 160px;
+  margin: 0 auto;
+}
+
+.face {
+  fill: var(--ifm-background-surface-color);
+  stroke: var(--ifm-color-emphasis-400);
+  stroke-width: 2;
+}
+
+.axis {
+  stroke: var(--ifm-color-emphasis-300);
+}
+
+.hand {
+  stroke: var(--ifm-color-primary);
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+
+.center {
+  fill: var(--ifm-color-primary);
+}
+
+.zero {
+  fill: var(--ifm-font-color-secondary);
+  font-size: 10px;
+}
+
+.readout {
+  font-variant-numeric: tabular-nums;
+}
