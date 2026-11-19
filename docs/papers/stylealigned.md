@@ -22,25 +22,27 @@ Page 5 left panel:
 
 后文似乎也没有对于为什么要用 `AdaIN` 的进一步分析。唯一的线索就是“We suspect that this is due to low attention flow from the reference to the target image.”，也就是在共享注意力的情况下，参考图像对目标图像的影响不够强。
 
-现在就来简单分析一下。用下标 $r$ 表示 Reference（长度 $N_r$），下标 $t$ 表示 Target（长度 $N_t$），单头特征维度为 $d$。沿序列维度拼接后的投影矩阵及注意力分数（Logits）分块如下：
-
-$$Q = \begin{bmatrix} Q_r \\ Q_t \end{bmatrix}, \quad K = \begin{bmatrix} K_r \\ K_t \end{bmatrix}, \quad S = \frac{1}{\sqrt{d}} Q K^\top = \frac{1}{\sqrt{d}} \begin{bmatrix} Q_r K_r^\top & Q_r K_t^\top \\ Q_t K_r^\top & Q_t K_t^\top \end{bmatrix} = \begin{bmatrix} S_{rr} & S_{rt} \\ S_{tr} & S_{tt} \end{bmatrix}$$
-
-沿序列维度对每个通道做一阶均值与中心化扰动分解：
+现在就来简单分析一下。用下标 $r$ 表示 Reference（长度 $N_r$），下标 $t$ 表示 Target（长度 $N_t$），单头特征维度为 $d$。沿序列维度对每个通道做一阶均值与中心化扰动分解：
 
 $$q_{i} = \mu_{q} + \tilde{q}_{i}, \qquad k_{j} = \mu_{k} + \tilde{k}_{j}$$
 
 其中序列期望 $\mathbb{E}[\tilde{q}] = \mathbb{E}[\tilde{k}] = 0$，通道协方差分别为 $\Sigma_{q}, \Sigma_{k} \in \mathbb{R}^{d \times d}$。将 注意力分数 (logits) 展开为四项分量：
 
-$$s(i,j) = q_{i}^\top k_{j} = \frac{1}{\sqrt{d}} \Big( \underbrace{\mu_{q}^\top \mu_{k}}_{\text{1. 均值内积}} + \underbrace{\tilde{q}_{i}^\top \mu_{k}}_{\text{2. Query 平移}} + \underbrace{\mu_{q}^\top \tilde{k}_{j}}_{\text{3. Key 静态偏置}} + \underbrace{\tilde{q}_{i}^\top \tilde{k}_{j}}_{\text{4. 内容匹配}} \Big)$$
+$$s(i,j) = \frac{1}{\sqrt{d}} q_{i}^\top k_{j} = \frac{1}{\sqrt{d}} \Big( \underbrace{\mu_{q}^\top \mu_{k}}_{\text{1. 均值内积}} + \underbrace{\tilde{q}_{i}^\top \mu_{k}}_{\text{2. Query 平移}} + \underbrace{\mu_{q}^\top \tilde{k}_{j}}_{\text{3. Key 静态偏置}} + \underbrace{\tilde{q}_{i}^\top \tilde{k}_{j}}_{\text{4. 内容匹配}} \Big)$$
 
-第 1 项和第 2 项均与 Key 索引无关，由于 $\operatorname{Softmax}(s + c\mathbf{1}) = \operatorname{Softmax}(s)$，向量的所有分量都加上一个常数不改变其 softmax 的结果，所以第一项和第二项对最终的注意力分布没有影响。
+经过 softmax 得到 attention 权重
 
-然而，在把 reference 和 target 拼接起来之后，reference 的加入改变了 $\mu_{k}$。原本 target 自己 $\mu_{k} = \mu_{k_t}$ 现在变成 target 和 reference 取平均
+$$
+A(i,j) = \frac{\exp(s(i,j))}{\sum_{j'} \exp(s(i,j'))}
+$$
 
-$$\mu_{k} = \frac{1}{2}(\mu_{k_r} + \mu_{k_t})$$
+第 1 项 $\mu_{q}^\top \mu_{k}$ 和索引无关，是常数，可以提取出来。在 softmax 时，分子分母同时存在，会被约去。
 
-但在拼接序列中，$K_r$ 子块的平移量为 $c_r(i) = \frac{1}{\sqrt{d}} q_{t,i}^\top \mu_{k_r}$，而 $K_t$ 子块的平移量为 $c_t(i) = \frac{1}{\sqrt{d}} q_{t,i}^\top \mu_{k_t}$；只要 $\mu_{k_r} \neq \mu_{k_t}$，**分段常数平移就会打破全局 Softmax 的平移不变性**。
+第 2 项 $\tilde{q}_{i}^\top \mu_{k}$ 只与 Query 索引 $i$ 有关。由于 softmax 是沿着 Key 维度计算的，$i$ 也视为常数，分子分母同时存在，也会被约去。
+
+(待续)
+
+以下是 LLM-generated 内容
 
 ---
 
